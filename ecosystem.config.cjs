@@ -74,6 +74,7 @@ module.exports = {
       instances: 1,
       exec_mode: 'fork',
       cwd: __dirname,
+      env_file: '.env',
       env_uat: {
         NODE_ENV: 'uat',
       },
@@ -92,6 +93,7 @@ module.exports = {
       instances: 1,
       exec_mode: 'fork',
       cwd: __dirname,
+      env_file: '.env',
       env_uat: {
         NODE_ENV: 'uat',
       },

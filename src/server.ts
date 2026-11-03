@@ -1,14 +1,15 @@
 import { app } from './app.js';
 import { env } from './config/env.js';
+import { logger } from './lib/logger.js';
 
 const server = app.listen(env.PORT, () => {
-  console.log(`Server listening on port ${env.PORT} (${env.NODE_ENV})`);
+  logger.info(`Server listening on port ${env.PORT} (${env.NODE_ENV})`);
 });
 
 const gracefulShutdown = () => {
-  console.log('Received shutdown signal, closing server gracefully...');
+  logger.info('Received shutdown signal, closing server gracefully...');
   server.close(() => {
-    console.log('Server closed.');
+    logger.info('Server closed.');
     process.exit(0);
   });
 };

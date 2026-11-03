@@ -1,0 +1,100 @@
+name: Hotel Backend CI
+
+on:
+  push:
+    branches: [master, main, dev, uat]
+  pull_request:
+    branches: [master, main, dev, uat]
+
+jobs:
+  lint-and-unit:
+    name: Lint, Typecheck & Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Run Unit Tests
+        run: npm run test:unit
+
+  integration-and-build:
+    name: Integration, Golden, Leak Scans & Build
+    needs: lint-and-unit
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: hotel_user
+          POSTGRES_PASSWORD: hotel_password
+          POSTGRES_DB: hotel_backend
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://hotel_user:hotel_password@localhost:5432/hotel_backend?schema=public
+      REDIS_URL: redis://localhost:6379
+      SESSION_SECRET: ci-test-session-secret-must-be-at-least-32-chars!
+      INTERNAL_SERVICE_SECRET: ci-test-internal-service-secret-32-chars!
+      HOTEL_TEST_USE_FLIGHT_KEY: 0
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+
+      - name: Deploy Prisma Migrations
+        run: npx prisma migrate deploy
+
+      - name: Run Integration Tests
+        run: npm run test:int
+
+      - name: Run Golden Pricing Tests
+        run: npx vitest run test/golden
+
+      - name: Run Leak Scan Contract Tests
+        run: npm run scan:leak
+
+      - name: Build TypeScript
+        run: npm run build

@@ -36,7 +36,6 @@ export class TarifarioService {
     const { doc } = cached;
 
     const result = await prisma.$transaction(async (tx) => {
-      // 1. Fetch current hotels again to ensure no divergence
       const currentHotels = await tx.hotel.findMany({
         include: {
           rooms: true,
@@ -49,7 +48,6 @@ export class TarifarioService {
         throw new ConflictError('Database changed; recomputed plan hash differs from expected hash');
       }
 
-      // 2. Apply hotel creations (is_active = false drafts)
       for (const h of doc.hotels) {
         let hotel = currentHotels.find((eh) => eh.slug === h.slug);
         if (!hotel) {
@@ -61,13 +59,12 @@ export class TarifarioService {
               category: h.category,
               baseCurrency: h.currency,
               isSoloDivisas: h.is_solo_divisas,
-              isActive: false, // Draft!
+              isActive: false,
             },
             include: { rooms: true, seasons: { include: { rates: true } } },
           });
         }
 
-        // Rooms
         const roomMap = new Map<string, string>();
         for (const rm of h.rooms) {
           let existingRoom = hotel.rooms.find(
@@ -86,7 +83,6 @@ export class TarifarioService {
           roomMap.set(normalizeName(rm.name), existingRoom.id);
         }
 
-        // Seasons
         const seasonMap = new Map<string, string>();
         for (const sn of h.seasons) {
           let existingSeason = hotel.seasons.find(
@@ -110,15 +106,13 @@ export class TarifarioService {
           seasonMap.set(normalizeName(sn.name), existingSeason.id);
         }
 
-        // Apply rate creations
         for (const r of h.rates) {
-          if (r.price_kind === 'BAJO_PEDIDO') continue; // Skip manual review
+          if (r.price_kind === 'BAJO_PEDIDO') continue;
 
           const roomTypeId = roomMap.get(normalizeName(r.room_name));
           const seasonId = seasonMap.get(normalizeName(r.season_name));
           if (!roomTypeId || !seasonId) continue;
 
-          // Check if rate already exists
           const existingRate = hotel.seasons
             .flatMap((s) => s.rates)
             .find(
@@ -153,12 +147,11 @@ export class TarifarioService {
         }
       }
 
-      // 3. Deactivate removed rates
       for (const pr of recomputedPlan.rates) {
         if (pr.action === 'deactivate' && pr.existingRateId) {
           await tx.rate.update({
             where: { id: pr.existingRateId },
-            data: { isActive: false }, // Deactivate, NEVER hard-delete
+            data: { isActive: false },
           });
         }
       }

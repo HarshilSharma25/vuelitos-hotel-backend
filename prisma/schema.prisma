@@ -75,6 +75,10 @@ enum PaymentStatus {
   verified
   rejected
   refunded
+  pending
+  needs_review
+  expired
+  failed
 }
 
 enum CheckStatus {
@@ -97,6 +101,43 @@ enum QuoteStatus {
   expired
 }
 
+enum PaymentMode {
+  online
+  at_hotel
+}
+
+enum RefundRequestStatus {
+  submitted
+  in_review
+  needs_info
+  approved
+  rejected
+  completed
+}
+
+enum RefundReasonCode {
+  change_of_plans
+  found_better_option
+  travel_cancelled
+  medical
+  duplicate_booking
+  hotel_issue
+  other
+}
+
+enum RefundDocumentKind {
+  payment_proof
+  id_document
+  other
+  completion_proof
+}
+
+enum RefundDocumentUploadedBy {
+  customer
+  staff
+}
+
+
 model Hotel {
   id                      String                @id @default(uuid())
   slug                    String                @unique
@@ -109,9 +150,15 @@ model Hotel {
   defaultCommissionPercent Decimal              @default(10.00) @map("default_commission_percent") @db.Decimal(5, 2)
   availabilityMode        AvailabilityMode      @default(manual) @map("availability_mode")
   isActive                Boolean               @default(true) @map("is_active")
+  childBandsEnabled       Boolean               @default(false) @map("child_bands_enabled")
   description             String?
   coverImageKey           String?               @map("cover_image_key")
   coverImageUrl           String?               @map("cover_image_url")
+  payNowEnabled           Boolean?              @map("pay_now_enabled")
+  payAtHotelEnabled       Boolean?              @map("pay_at_hotel_enabled")
+  paymentWindowHours      Int?                  @map("payment_window_hours")
+  reminderOffsetsPct      Json?                 @map("reminder_offsets_pct")
+  autoConfirmAfterPayment Boolean?              @map("auto_confirm_after_payment")
   rooms                   RoomType[]
   seasons                 Season[]
   images                  HotelImage[]
@@ -226,20 +273,80 @@ model Booking {
   contactEmail      String         @map("contact_email")
   contactPhone      String?        @map("contact_phone")
   notes             String?
+  guestDetails      Json?          @map("guest_details")
   paymentMethodPref PaymentMethod? @map("payment_method_pref")
   termsAcceptedAt   DateTime       @map("terms_accepted_at")
   totalsByMethod    Json           @map("totals_by_method")
   fxSnapshot        Json           @map("fx_snapshot")
   slaDueAt          DateTime?      @map("sla_due_at")
+  paymentMode       PaymentMode    @default(online) @map("payment_mode")
+  paymentWindowHours Int?          @map("payment_window_hours")
+  remindersSent     Int[]          @default([]) @map("reminders_sent")
   createdAt         DateTime       @default(now()) @map("created_at")
   updatedAt         DateTime       @updatedAt @map("updated_at")
   items             BookingItem[]
   events            BookingEvent[]
   payments          Payment[]
   checks            AvailabilityCheck[]
+  refundRequests    RefundRequest[]
 
   @@index([userId])
   @@map("bookings")
+}
+
+model RefundRequest {
+  id                      String               @id @default(uuid())
+  bookingId               String               @map("booking_id")
+  booking                 Booking              @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  status                  RefundRequestStatus  @default(submitted)
+  reasonCode              RefundReasonCode     @map("reason_code")
+  reasonText              String?              @map("reason_text") @db.VarChar(1000)
+  requestedBy             String               @map("requested_by")
+  destinationMethod       String               @map("destination_method")
+  destinationDetailsEnc   String               @map("destination_details_enc") @db.Text
+  approvedAmount          Decimal?             @map("approved_amount") @db.Decimal(12, 2)
+  approvedCurrency        String?              @map("approved_currency")
+  staffMessage            String?              @map("staff_message") @db.VarChar(2000)
+  rejectionReason         String?              @map("rejection_reason") @db.VarChar(2000)
+  refundReference         String?              @map("refund_reference")
+  createdAt               DateTime             @default(now()) @map("created_at")
+  updatedAt               DateTime             @updatedAt @map("updated_at")
+  documents               RefundDocument[]
+  events                  RefundEvent[]
+
+  @@index([bookingId])
+  @@index([status, createdAt])
+  @@map("refund_requests")
+}
+
+model RefundDocument {
+  id              String                   @id @default(uuid())
+  refundRequestId String                   @map("refund_request_id")
+  refundRequest   RefundRequest            @relation(fields: [refundRequestId], references: [id], onDelete: Cascade)
+  kind            RefundDocumentKind
+  storageKey      String                   @map("storage_key")
+  originalName    String                   @map("original_name")
+  mimeType        String                   @map("mime_type")
+  sizeBytes       Int                      @map("size_bytes")
+  uploadedBy      RefundDocumentUploadedBy @map("uploaded_by")
+  createdAt       DateTime                 @default(now()) @map("created_at")
+
+  @@index([refundRequestId])
+  @@map("refund_documents")
+}
+
+model RefundEvent {
+  id              BigInt               @id @default(autoincrement())
+  refundRequestId String               @map("refund_request_id")
+  refundRequest   RefundRequest        @relation(fields: [refundRequestId], references: [id], onDelete: Cascade)
+  fromStatus      RefundRequestStatus? @map("from_status")
+  toStatus        RefundRequestStatus  @map("to_status")
+  actorType       String               @map("actor_type")
+  actorId         String?              @map("actor_id")
+  note            String?
+  createdAt       DateTime             @default(now()) @map("created_at")
+
+  @@map("refund_events")
 }
 
 model BookingItem {
@@ -273,19 +380,37 @@ model BookingEvent {
 }
 
 model Payment {
-  id           String        @id @default(uuid())
-  bookingId    String        @map("booking_id")
-  booking      Booking       @relation(fields: [bookingId], references: [id], onDelete: Restrict)
-  method       PaymentMethod
-  currency     String
-  amountQuoted Decimal       @map("amount_quoted") @db.Decimal(12, 2)
-  reference    String
-  status       PaymentStatus @default(submitted)
-  submittedAt  DateTime      @default(now()) @map("submitted_at")
-  verifiedAt   DateTime?     @map("verified_at")
-  verifiedBy   String?       @map("verified_by")
+  id                 String        @id @default(uuid())
+  bookingId          String        @map("booking_id")
+  booking            Booking       @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+  method             PaymentMethod
+  currency           String
+  amountQuoted       Decimal       @map("amount_quoted") @db.Decimal(12, 2)
+  amountReceived     Decimal?      @map("amount_received") @db.Decimal(12, 2)
+  reference          String
+  status             PaymentStatus @default(submitted)
+  rejectionReason    String?       @map("rejection_reason")
+  rejectionNotes     String?       @map("rejection_notes")
+  submittedAt        DateTime      @default(now()) @map("submitted_at")
+  verifiedAt         DateTime?     @map("verified_at")
+  verifiedBy         String?       @map("verified_by")
+  externalProvider   String?       @map("external_provider")
+  externalSessionId  String?       @unique @map("external_session_id")
+  rawStatus          String?       @map("raw_status")
 
   @@map("payments")
+}
+
+model PaymentEvent {
+  id        BigInt   @id @default(autoincrement())
+  provider  String
+  eventId   String   @map("event_id")
+  type      String
+  payload   Json
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([provider, eventId])
+  @@map("payment_events")
 }
 
 model AvailabilityCheck {
@@ -371,3 +496,32 @@ model Holiday {
 
   @@map("holidays")
 }
+
+model CheckoutSettings {
+  id                      String   @id @default("global")
+  payNowEnabled           Boolean  @default(true) @map("pay_now_enabled")
+  payAtHotelEnabled       Boolean  @default(true) @map("pay_at_hotel_enabled")
+  cardPaymentsEnabled     Boolean  @default(true) @map("card_payments_enabled")
+  paymentWindowHours      Int      @default(48) @map("payment_window_hours")
+  reminderOffsetsPct      Int[]    @default([50, 90]) @map("reminder_offsets_pct")
+  autoConfirmAfterPayment Boolean  @default(false) @map("auto_confirm_after_payment")
+  createdAt               DateTime @default(now()) @map("created_at")
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  @@map("checkout_settings")
+}
+
+model SettingsAudit {
+  id          String   @id @default(uuid())
+  settingType String   @map("setting_type")
+  targetId    String?  @map("target_id")
+  oldValue    Json     @map("old_value")
+  newValue    Json     @map("new_value")
+  actorId     String   @map("actor_id")
+  actorType   String   @map("actor_type")
+  timestamp   DateTime @default(now())
+
+  @@index([settingType, targetId])
+  @@map("settings_audit")
+}
+

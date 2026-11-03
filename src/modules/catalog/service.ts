@@ -1,6 +1,7 @@
 import { prisma } from '../../lib/prisma.js';
 import { env } from '../../config/env.js';
 import { ratesService } from '../rates/service.js';
+import { settingsService } from '../settings/service.js';
 import {
   effectiveRooms,
   parseStayWindow,
@@ -90,7 +91,6 @@ export function calculateUndatedDesde(
 
       if (canPriceAll) {
         const money = calculateMoneyFromBase(roomTotalRat, baseCurrency, isSoloDivisas, fx);
-        // Rank by USDT, then base
         if (money.usdt < bestUsdt || (money.usdt === bestUsdt && money.base < bestBase)) {
           bestUsdt = money.usdt;
           bestBase = money.base;
@@ -132,7 +132,6 @@ export class CatalogService {
   }
 
   async searchHotels(params: CatalogSearchParams) {
-    // 1. Clamp applied params
     const adults = Math.min(20, Math.max(1, Number(params.adults) || 2));
     const children = Math.min(20, Math.max(0, Number(params.children) || 0));
     const rooms = Math.min(10, Math.max(1, Number(params.rooms) || 1));
@@ -148,7 +147,6 @@ export class CatalogService {
     const fx = await ratesService.getLatestEffectiveRates();
     const bookingDate = env.PRICING_NOW || getCaracasWallDate();
 
-    // 2. Query hotels from DB
     const whereClause: any = { isActive: true };
     if (params.destination) {
       whereClause.destination = {
@@ -204,7 +202,6 @@ export class CatalogService {
       }
       const imageUrl = resolvedCoverUrl || fallbackImageUrl;
 
-      // Transform seasons to pure SeasonInput
       const pureSeasons: SeasonInput[] = h.seasons.map((s) => ({
         id: s.id,
         hotelId: s.hotelId,
@@ -239,16 +236,13 @@ export class CatalogService {
       }));
 
       if (hasDates && stayWindow) {
-        // Multi-room split
         const split = splitGuests(totalGuests, roomsQuoted);
-        // Find best option across rooms & meal plans
         let bestOptionPrice: any = null;
         let bestUsdt = Infinity;
         let bestAvailability: any = 'no_rate';
         let minNightsReq: number | undefined;
 
         for (const room of h.rooms) {
-          // Check if this room fits the biggest split
           const biggestRoomGuests = Math.max(...split);
           if (room.maxOccupancy < biggestRoomGuests) continue;
 
@@ -320,7 +314,6 @@ export class CatalogService {
           min_nights_required: bestAvailability === 'min_nights' ? minNightsReq : undefined,
         });
       } else {
-        // Undated: find cheapest 1-night room price matching party using splitGuests
         const undatedRes = calculateUndatedDesde(
           h.rooms,
           pureSeasons,
@@ -362,10 +355,8 @@ export class CatalogService {
       }
     }
 
-    // Sort items by availability, stars (if requested), then USDT and base
     const sort = params.sort || 'price_asc';
     items.sort((a, b) => {
-      // Available items come before unavailable
       const aAvail = a.availability === 'ok' ? 1 : 0;
       const bAvail = b.availability === 'ok' ? 1 : 0;
       if (bAvail !== aAvail) return bAvail - aAvail;
@@ -386,7 +377,6 @@ export class CatalogService {
       return sort === 'price_desc' ? bBase - aBase : aBase - bBase;
     });
 
-    // Pagination
     let startIndex = 0;
     if (params.cursor) {
       try {
@@ -503,7 +493,6 @@ export class CatalogService {
     hotel.seasons.forEach((s) => s.rates.forEach((r) => mealPlansSet.add(r.mealPlan)));
     const mealPlans = Array.from(mealPlansSet);
 
-    // Build seasonal_rates (one-night list prices)
     const seasonalRates = hotel.seasons.map((s) => ({
       season: s.name,
       date_from: s.dateFrom.toISOString().slice(0, 10),
@@ -528,7 +517,6 @@ export class CatalogService {
         }),
     }));
 
-    // Build from_price using the same multi-room split as catalog
     const undatedRes = calculateUndatedDesde(
       hotel.rooms,
       pureSeasons,
@@ -542,7 +530,6 @@ export class CatalogService {
     );
     const lowestFromPrice = undatedRes.price;
 
-    // Build stay if dates sent
     let stayData: any = null;
     const hasDates = Boolean(params.check_in && params.check_out);
     if (hasDates && !isGroup) {
@@ -660,6 +647,23 @@ export class CatalogService {
     }
     coverUrl = coverUrl || fallbackCoverUrl;
 
+    const effectiveSettings = await settingsService.getEffectiveCheckoutSettings(hotel.id);
+    const cardAvailable = await settingsService.isStripeCardAvailable(hotel.id);
+    const checkoutOptions = {
+      pay_now: effectiveSettings.payNowEnabled,
+      pay_at_hotel: effectiveSettings.payAtHotelEnabled,
+      card: cardAvailable,
+      payment_window_hours: effectiveSettings.paymentWindowHours,
+    };
+
+    if (stayData?.options && !cardAvailable) {
+      for (const opt of stayData.options) {
+        if (opt.methods) {
+          opt.methods = opt.methods.filter((m: any) => m.method !== 'stripe_card');
+        }
+      }
+    }
+
     return {
       hotel: {
         slug: hotel.slug,
@@ -697,6 +701,7 @@ export class CatalogService {
       stay: stayData,
       availability,
       group_request: groupRequest,
+      checkout_options: checkoutOptions,
       exchange: fx,
     };
   }
@@ -813,6 +818,20 @@ export class CatalogService {
       };
     }
 
+    const effectiveSettings = await settingsService.getEffectiveCheckoutSettings(hotel.id);
+    const cardAvailable = await settingsService.isStripeCardAvailable(hotel.id);
+    const checkoutOptions = {
+      pay_now: effectiveSettings.payNowEnabled,
+      pay_at_hotel: effectiveSettings.payAtHotelEnabled,
+      card: cardAvailable,
+      payment_window_hours: effectiveSettings.paymentWindowHours,
+    };
+
+    let methods = result.methods;
+    if (!cardAvailable) {
+      methods = methods.filter((m: any) => m.method !== 'stripe_card');
+    }
+
     return {
       priced: true as const,
       nights: result.nights,
@@ -823,7 +842,8 @@ export class CatalogService {
         price: r.price,
       })),
       total: result.total,
-      methods: result.methods,
+      methods,
+      checkout_options: checkoutOptions,
       exchange: fx,
     };
   }

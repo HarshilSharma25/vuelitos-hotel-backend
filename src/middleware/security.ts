@@ -6,7 +6,7 @@ import { env } from '../config/env.js';
 
 export const helmetMiddleware = helmet({
   hsts: {
-    maxAge: 63072000, // 2 years
+    maxAge: 63072000,
     includeSubDomains: true,
     preload: true,
   },
@@ -15,17 +15,21 @@ export const helmetMiddleware = helmet({
   hidePoweredBy: true,
 });
 
+function normalizeOrigin(origin: string): string {
+  return origin.replace(/\/+$/, '');
+}
+
 const allowedOriginsList = [
   env.PUBLIC_API_ORIGIN,
   ...env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()),
   'http://localhost:5173',
-];
+  'http://localhost:5174',
+].map(normalizeOrigin);
 
 export const corsMiddleware = cors({
   origin: (origin, callback) => {
-    // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
     if (!origin) return callback(null, true);
-    if (allowedOriginsList.includes(origin)) {
+    if (allowedOriginsList.includes(normalizeOrigin(origin))) {
       return callback(null, true);
     }
     return callback(null, false);
@@ -38,8 +42,13 @@ export const corsMiddleware = cors({
     'X-Booking-Token',
     'X-Request-Id',
     'Accept-Language',
+    'X-Visitor-Id',
+    'X-Client-Channel',
+    'X-Client-User-Agent',
+    'X-Flow-Id',
+    'If-None-Match',
   ],
-  exposedHeaders: ['Retry-After'],
+  exposedHeaders: ['Retry-After', 'ETag'],
 });
 
 export function requestIdMiddleware(req: Request, res: Response, next: NextFunction) {

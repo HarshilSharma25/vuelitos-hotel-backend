@@ -1,0 +1,140 @@
+name: Deploy Hotel Backend
+
+on:
+  workflow_run:
+    workflows: [Hotel Backend CI]
+    types: [completed]
+    branches: [master, main, dev, uat]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Environment to deploy
+        required: true
+        type: choice
+        options:
+          - production
+          - dev
+          - uat
+      git_branch:
+        description: Git branch on the server (defaults by target if empty)
+        required: false
+        type: string
+
+concurrency:
+  group: hotel-backend-deploy-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-prod:
+    runs-on: ubuntu-latest
+    if: >
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        (github.event.workflow_run.head_branch == 'master' || github.event.workflow_run.head_branch == 'main')
+      ) ||
+      (
+        github.event_name == 'workflow_dispatch' &&
+        inputs.target == 'production'
+      )
+
+    steps:
+      - name: Deploy to PROD Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST_IP }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          key: ${{ secrets.SERVER_SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SERVER_ACTIVE_PORT }}
+          script: |
+            echo "🚀 Deploying Hotel PROD..."
+            cd /root/hotel-server
+            git fetch origin
+            git reset --hard origin/${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || (inputs.git_branch || github.ref_name) }}
+            npm install
+            npx prisma generate
+            mv .env .enve
+            mv .env.prod .env
+            npx prisma migrate deploy
+            npm run build
+            mv .env .env.prod
+            mv .enve .env
+            pm2 reload HotelBackend-Prod HotelBackend-Worker-Prod || npm run pm2:start
+            echo "✅ Hotel PROD deployment completed!"
+
+  deploy-dev:
+    runs-on: ubuntu-latest
+    if: >
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'dev'
+      ) ||
+      (
+        github.event_name == 'workflow_dispatch' &&
+        inputs.target == 'dev'
+      )
+
+    steps:
+      - name: Deploy to DEV Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER}}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            echo "🧪 Deploying Hotel DEV..."
+            cd /root/hotel-dev
+            git fetch origin
+            git reset --hard origin/${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || (inputs.git_branch || 'dev') }}
+            npm install
+            npx prisma generate
+            mv .env .enve
+            mv .env.dev .env
+            npx prisma migrate deploy
+            npm run build
+            mv .env .env.dev
+            mv .enve .env
+            pm2 reload HotelBackend-Dev HotelBackend-Worker-Dev || npm run pm2:start:dev
+            echo "✅ Hotel DEV deployment completed!"
+
+  deploy-uat:
+    runs-on: ubuntu-latest
+    if: >
+      (
+        github.event_name == 'workflow_run' &&
+        github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'uat'
+      ) ||
+      (
+        github.event_name == 'workflow_dispatch' &&
+        inputs.target == 'uat'
+      )
+
+    steps:
+      - name: Deploy to UAT Server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER}}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_PORT }}
+          script: |
+            echo "🧪 Deploying Hotel UAT..."
+            cd /root/hotel-server
+            git fetch origin
+            git reset --hard origin/${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || (inputs.git_branch || 'uat') }}
+            npm install
+            npx prisma generate
+            mv .env .enve
+            mv .env.uat .env
+            npx prisma migrate deploy
+            npm run build
+            mv .env .env.uat
+            mv .enve .env
+            pm2 reload HotelBackend-UAT HotelBackend-Worker-UAT || npm run pm2:start:uat
+            echo "✅ Hotel UAT deployment completed!"

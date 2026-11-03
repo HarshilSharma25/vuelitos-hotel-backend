@@ -7,3 +7,4 @@ uploads/
 certs/
 *.pem
 
+*.md

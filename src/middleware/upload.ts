@@ -4,11 +4,9 @@ import { ValidationError } from '../lib/errors.js';
 
 export function detectImageType(buf: Buffer): 'jpeg' | 'png' | 'webp' | null {
   if (!buf || buf.length < 12) return null;
-  // JPEG: FF D8 FF
   if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
     return 'jpeg';
   }
-  // PNG: 89 50 4E 47 0D 0A 1A 0A
   if (
     buf[0] === 0x89 &&
     buf[1] === 0x50 &&
@@ -21,7 +19,6 @@ export function detectImageType(buf: Buffer): 'jpeg' | 'png' | 'webp' | null {
   ) {
     return 'png';
   }
-  // WebP: RIFF (bytes 0..3) ... WEBP (bytes 8..11)
   if (
     buf[0] === 0x52 &&
     buf[1] === 0x49 &&
@@ -40,7 +37,7 @@ export function detectImageType(buf: Buffer): 'jpeg' | 'png' | 'webp' | null {
 const multerUpload = multer({
   storage: multer.memoryStorage(),
   limits: {
-    fileSize: 10 * 1024 * 1024, // 10MB limit
+    fileSize: 10 * 1024 * 1024,
   },
 }).single('file');
 

@@ -36,7 +36,6 @@ adminAuthRouter.post(
         throw new UnauthenticatedError('Invalid email or password');
       }
 
-      // Generate 12-hour session
       const rawToken = crypto.randomBytes(32).toString('hex');
       const tokenHash = hashSessionToken(rawToken);
       const twelveHoursMs = 12 * 60 * 60 * 1000;
@@ -51,7 +50,6 @@ adminAuthRouter.post(
         },
       });
 
-      // Cache session in Redis
       const sessionCache = {
         sessionId: session.id,
         userId: user.id,
@@ -76,7 +74,7 @@ adminAuthRouter.post(
 
       return res.json({
         data: {
-          token: rawToken, // For API client convenience
+          token: rawToken,
           user: {
             id: user.id,
             email: user.email,

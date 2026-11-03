@@ -1,7 +1,7 @@
 export interface AvailabilityCheckRequest {
   hotelId: string;
-  checkIn: string; // YYYY-MM-DD
-  checkOut: string; // YYYY-MM-DD
+  checkIn: string;
+  checkOut: string;
   rooms: { roomTypeId: string; guests: number }[];
 }
 

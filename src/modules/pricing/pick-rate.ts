@@ -29,13 +29,13 @@ export function pickRate(
   sellable.sort((a, b) => {
     const aHasDays = a.daysOfWeek && a.daysOfWeek.length > 0 ? 1 : 0;
     const bHasDays = b.daysOfWeek && b.daysOfWeek.length > 0 ? 1 : 0;
-    if (bHasDays !== aHasDays) return bHasDays - aHasDays; // day-specific first
+    if (bHasDays !== aHasDays) return bHasDays - aHasDays;
 
-    if (b.minNights !== a.minNights) return b.minNights - a.minNights; // longer min nights first
+    if (b.minNights !== a.minNights) return b.minNights - a.minNights;
 
     const aRat = Rational.from(a.netRate);
     const bRat = Rational.from(b.netRate);
-    return aRat.cmp(bRat); // cheaper first
+    return aRat.cmp(bRat);
   });
 
   return { rate: sellable[0] };

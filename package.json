@@ -6,16 +6,27 @@
   "type": "module",
   "scripts": {
     "build": "tsc",
+    "typecheck": "tsc --noEmit",
     "start": "node dist/src/server.js",
     "start:worker": "node dist/src/worker.js",
     "dev": "tsx watch src/server.ts",
     "dev:worker": "tsx watch src/worker.ts",
     "test": "vitest run --fileParallelism=false",
+    "test:unit": "vitest run test/unit",
+    "test:int": "vitest run test/integration --fileParallelism=false",
+    "scan:leak": "vitest run test/leak",
     "test:watch": "vitest",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:deploy": "prisma migrate deploy",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "pm2:start": "pm2 start ecosystem.config.cjs --only HotelBackend-Prod,HotelBackend-Worker-Prod --env production",
+    "pm2:start:dev": "pm2 start ecosystem.config.cjs --only HotelBackend-Dev,HotelBackend-Worker-Dev --env development",
+    "pm2:start:uat": "pm2 start ecosystem.config.cjs --only HotelBackend-UAT,HotelBackend-Worker-UAT --env uat",
+    "pm2:reload": "pm2 reload ecosystem.config.cjs",
+    "pm2:stop": "pm2 stop ecosystem.config.cjs",
+    "pm2:logs": "pm2 logs HotelBackend-Prod",
+    "pm2:status": "pm2 status"
   },
   "prisma": {
     "seed": "tsx prisma/seed.ts"

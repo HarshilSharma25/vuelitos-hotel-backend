@@ -1,6 +1,6 @@
 export const splitGuests = (pax: number, rooms: number): number[] => {
   if (pax <= 0 || rooms <= 0) return [];
-  const n = Math.min(rooms, pax); // never an empty room
+  const n = Math.min(rooms, pax);
   const base = Math.floor(pax / n);
   return Array.from({ length: n }, (_, i) => base + (i < pax % n ? 1 : 0));
 };

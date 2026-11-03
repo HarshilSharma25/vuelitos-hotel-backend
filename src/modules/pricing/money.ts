@@ -24,7 +24,6 @@ export class Rational {
 
   static fromNumber(val: number): Rational {
     if (!Number.isFinite(val)) throw new Error('Cannot create Rational from non-finite number');
-    // For small decimals in scientific notation like 1e-7
     if (Math.abs(val) < 1e-4 && val !== 0) {
       return Rational.fromString(val.toFixed(12).replace(/0+$/, ''));
     }
@@ -35,7 +34,6 @@ export class Rational {
     let trimmed = val.trim();
     if (!trimmed) throw new Error('Cannot create Rational from empty string');
 
-    // Handle exponential notation like 1e-4 or 2.5e3
     if (/[eE]/.test(trimmed)) {
       const num = Number(trimmed);
       if (!Number.isFinite(num)) throw new Error(`Invalid numeric string: ${val}`);
@@ -110,7 +108,6 @@ export class Rational {
     const div = absNum / this.den;
     const rem = absNum % this.den;
 
-    // Half-up rounding: if 2 * rem >= den, round up
     const rounded = 2n * rem >= this.den ? div + 1n : div;
     const finalScaled = isNegative ? -rounded : rounded;
 

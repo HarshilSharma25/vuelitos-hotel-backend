@@ -3,6 +3,7 @@ import type { KeyInput } from 'jose';
 import fs from 'node:fs';
 import path from 'node:path';
 import { env } from '../config/env.js';
+import { logger } from './logger.js';
 import { UnauthenticatedError } from './errors.js';
 
 export interface VerifiedUserIdentity {
@@ -18,6 +19,10 @@ export interface VerifiedUserIdentity {
 
 let cachedPublicKey: KeyInput | null = null;
 
+export function setPublicKeyOverride(key: KeyInput | null): void {
+  cachedPublicKey = key;
+}
+
 async function getPublicKey(): Promise<KeyInput | null> {
   if (cachedPublicKey) return cachedPublicKey;
 
@@ -27,7 +32,6 @@ async function getPublicKey(): Promise<KeyInput | null> {
   } else if (env.JWT_PUBLIC_KEY_PATH && fs.existsSync(env.JWT_PUBLIC_KEY_PATH)) {
     pem = fs.readFileSync(env.JWT_PUBLIC_KEY_PATH, 'utf8');
   } else {
-    // Default certs directory in hotel-backend
     const defaultPath = path.resolve(process.cwd(), 'certs/jwt-public.pem');
     const moduleFallbackPath = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../certs/jwt-public.pem');
     if (fs.existsSync(defaultPath)) {
@@ -42,7 +46,7 @@ async function getPublicKey(): Promise<KeyInput | null> {
       cachedPublicKey = await jose.importSPKI(pem, 'RS256');
       return cachedPublicKey;
     } catch (e) {
-      console.warn('Failed to import RS256 public key:', e);
+      logger.warn({ err: e }, 'Failed to import RS256 public key');
     }
   }
   return null;
@@ -84,7 +88,6 @@ export async function verifyUnifiedToken(token: string): Promise<VerifiedUserIde
 
   let payload: jose.JWTPayload;
   try {
-    // Legacy Flight Backend HS256 tokens omit iss/aud; validate those only when present.
     const result = await jose.jwtVerify(token, verifyKey, { algorithms: [alg] });
     payload = result.payload;
 
@@ -121,7 +124,6 @@ export async function verifyUnifiedToken(token: string): Promise<VerifiedUserIde
     throw new UnauthenticatedError('Invalid token signature or payload');
   }
 
-  // Security check: Refresh tokens MUST NEVER be used as access tokens
   if (payload.token_type === 'refresh') {
     throw new UnauthenticatedError('Refresh tokens cannot be used as access tokens');
   }

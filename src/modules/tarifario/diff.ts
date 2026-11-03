@@ -65,7 +65,6 @@ export function computeImportPlan(
   const planRates: PlanRateItem[] = [];
 
   for (const h of doc.hotels) {
-    // 1. Match hotel: slug, alias, or normalized name
     const matchedHotel =
       existingHotels.find((eh) => eh.slug === h.slug) ||
       (aliases[h.slug] && existingHotels.find((eh) => eh.slug === aliases[h.slug])) ||
@@ -126,7 +125,6 @@ export function computeImportPlan(
       isSoloDivisas: matchedHotel.isSoloDivisas,
     });
 
-    // 2. Existing rates map
     const existingRates: any[] = [];
     matchedHotel.seasons?.forEach((s: any) => {
       s.rates?.forEach((r: any) => {
@@ -158,7 +156,6 @@ export function computeImportPlan(
         continue;
       }
 
-      // Match rate in existing
       const match = existingRates.find((er) => {
         if (!er.isActive) return false;
         if (normalizeName(er.roomName || '') !== normalizeName(r.room_name)) return false;
@@ -188,7 +185,6 @@ export function computeImportPlan(
             netRate: r.net_rate,
           });
         } else {
-          // Changed price: deactivate old, create new
           planRates.push({
             action: 'deactivate',
             existingRateId: match.id,
@@ -232,7 +228,6 @@ export function computeImportPlan(
       }
     }
 
-    // Existing active rates not in sheet -> deactivate
     for (const er of existingRates) {
       if (er.isActive && !seenExistingRateIds.has(er.id)) {
         planRates.push({

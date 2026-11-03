@@ -3,7 +3,7 @@ import path from 'node:path';
 import * as jose from 'jose';
 import { setPublicKeyOverride } from '../../src/lib/jwt.js';
 
-export async function loadFlightTestPrivateKey(): Promise<jose.KeyLike> {
+export async function loadFlightTestPrivateKey(): Promise<jose.KeyInput> {
   if (process.env.HOTEL_TEST_USE_FLIGHT_KEY === '1') {
     const privPem = fs.readFileSync(
       path.resolve('../Flight-Booking-Backend/certs/jwt-private.pem'),

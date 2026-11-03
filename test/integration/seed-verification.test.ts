@@ -4,8 +4,7 @@ import { app } from '../../src/app.js';
 import { prisma } from '../../src/lib/prisma.js';
 import { seed } from '../../prisma/seed.js';
 import * as jose from 'jose';
-import fs from 'node:fs';
-import path from 'node:path';
+import { loadFlightTestPrivateKey } from './flight-test-jwt.js';
 
 describe('Comprehensive Seed Data & State Machine Query Verification', () => {
   let adminToken: string;
@@ -27,10 +26,7 @@ describe('Comprehensive Seed Data & State Machine Query Verification', () => {
     adminToken = loginRes.body.data.token;
     expect(adminToken).toBeDefined();
 
-    // 3. Generate Flight Customer JWTs for customer 1 and customer 2
-    const keyPath = path.resolve('../Flight-Booking-Backend/certs/jwt-private.pem');
-    const privateKeyPem = fs.readFileSync(keyPath, 'utf8');
-    const privateKey = await jose.importPKCS8(privateKeyPem, 'RS256');
+    const privateKey = await loadFlightTestPrivateKey();
     const now = Math.floor(Date.now() / 1000);
 
     customer1Token = await new jose.SignJWT({

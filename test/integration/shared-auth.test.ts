@@ -2,10 +2,8 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
 import { app } from '../../src/app.js';
 import { prisma } from '../../src/lib/prisma.js';
-import { setPublicKeyOverride } from '../../src/lib/jwt.js';
-import fs from 'node:fs';
-import path from 'node:path';
 import * as jose from 'jose';
+import { loadFlightTestPrivateKey } from './flight-test-jwt.js';
 
 describe('Shared Authentication & Authorization Integration', () => {
   let privateKey: jose.KeyInput;
@@ -107,15 +105,7 @@ describe('Shared Authentication & Authorization Integration', () => {
       });
     }
 
-    // 2. Load private key to sign Flight-Backend-compatible tokens, or generate dynamically
-    if (process.env.HOTEL_TEST_USE_FLIGHT_KEY === '1') {
-      const privPem = fs.readFileSync(path.resolve('../Flight-Booking-Backend/certs/jwt-private.pem'), 'utf8');
-      privateKey = await jose.importPKCS8(privPem, 'RS256');
-    } else {
-      const { publicKey, privateKey: generatedPrivKey } = await jose.generateKeyPair('RS256');
-      privateKey = generatedPrivKey;
-      setPublicKeyOverride(publicKey);
-    }
+    privateKey = await loadFlightTestPrivateKey();
 
     // 3. Generate tokens simulating Flight Backend issuance
     const now = Math.floor(Date.now() / 1000);

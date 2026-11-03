@@ -2,34 +2,39 @@ import { z } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const candidateEnvFiles = [
-  process.env.ENV_FILE,
-  process.env.NODE_ENV ? `.env.${process.env.NODE_ENV}` : null,
-  '.env.local',
-  '.env',
-].filter(Boolean) as string[];
-
-for (const envFileName of candidateEnvFiles) {
-  if (fs.existsSync(envFileName)) {
-    const content = fs.readFileSync(envFileName, 'utf8');
-    for (const line of content.split('\n')) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) continue;
-      const idx = trimmed.indexOf('=');
-      if (idx !== -1) {
-        const key = trimmed.slice(0, idx).trim();
-        const val = trimmed.slice(idx + 1).trim();
-        if (!process.env[key]) {
-          process.env[key] = val;
-        }
-      }
+function applyEnvFile(envFileName: string, onlyMissing: boolean) {
+  if (!fs.existsSync(envFileName)) return;
+  const content = fs.readFileSync(envFileName, 'utf8');
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const idx = trimmed.indexOf('=');
+    if (idx === -1) continue;
+    const key = trimmed.slice(0, idx).trim();
+    const val = trimmed.slice(idx + 1).trim();
+    if (!onlyMissing || process.env[key] === undefined || process.env[key] === '') {
+      process.env[key] = val;
     }
   }
 }
 
+// Base first, then overrides (.env.uat must not block PORT in .env)
+const layeredEnvFiles = [
+  '.env',
+  '.env.local',
+  process.env.NODE_ENV ? `.env.${process.env.NODE_ENV}` : null,
+].filter(Boolean) as string[];
+
+for (const envFileName of layeredEnvFiles) {
+  applyEnvFile(envFileName, true);
+}
+if (process.env.ENV_FILE) {
+  applyEnvFile(process.env.ENV_FILE, false);
+}
+
 const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  NODE_ENV: z.enum(['development', 'production', 'test', 'uat']).default('development'),
   DATABASE_URL: z
     .string()
     .default('postgresql://pavitrasharmna@localhost:5432/hotel_backend?schema=public'),

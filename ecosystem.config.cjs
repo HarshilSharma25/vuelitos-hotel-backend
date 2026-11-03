@@ -73,6 +73,7 @@ module.exports = {
       script: 'dist/src/server.js',
       instances: 1,
       exec_mode: 'fork',
+      cwd: __dirname,
       env_uat: {
         NODE_ENV: 'uat',
       },
@@ -90,6 +91,7 @@ module.exports = {
       script: 'dist/src/worker.js',
       instances: 1,
       exec_mode: 'fork',
+      cwd: __dirname,
       env_uat: {
         NODE_ENV: 'uat',
       },

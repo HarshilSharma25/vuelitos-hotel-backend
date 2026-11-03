@@ -20,7 +20,7 @@ import { adminAuthRouter } from './auth.js';
 import { fileStorage } from '../files/storage.js';
 import { generateQuoteCode } from '../../lib/ids.js';
 import crypto from 'node:crypto';
-import sharp from 'sharp';
+import { getSharp } from '../../lib/sharp-lazy.js';
 import { imageUploadMiddleware } from '../../middleware/upload.js';
 import { tarifarioService } from '../tarifario/service.js';
 import { env } from '../../config/env.js';
@@ -1221,6 +1221,13 @@ adminRouter.post(
       const hotelId = req.params.id as string;
       const hotel = await prisma.hotel.findUnique({ where: { id: hotelId } });
       if (!hotel) throw new NotFoundError('Hotel not found');
+
+      const sharp = await getSharp();
+      if (!sharp) {
+        throw new ValidationError(
+          'Image processing is unavailable on this server. Install sharp for this CPU or upload WebP/JPEG without conversion.'
+        );
+      }
 
       const imageId = crypto.randomUUID();
       const webpBuffer = await sharp(req.file!.buffer)

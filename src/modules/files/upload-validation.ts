@@ -1,4 +1,4 @@
-import sharp from 'sharp';
+import { getSharp } from '../../lib/sharp-lazy.js';
 
 const MAX_BYTES = 5 * 1024 * 1024;
 
@@ -40,6 +40,11 @@ export async function normalizeUpload(buffer: Buffer, mime: string): Promise<{ d
     return { data: buffer, mime };
   }
   if (mime.startsWith('image/')) {
+    const sharp = await getSharp();
+    if (!sharp) {
+      const outMime = mime === 'image/heic' ? 'image/jpeg' : mime;
+      return { data: buffer, mime: outMime };
+    }
     const out = await sharp(buffer).rotate().withMetadata({ exif: undefined }).toBuffer();
     const outMime = mime === 'image/heic' ? 'image/jpeg' : mime;
     return { data: out, mime: outMime };

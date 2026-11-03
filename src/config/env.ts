@@ -29,7 +29,7 @@ for (const envFileName of candidateEnvFiles) {
 
 const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
-  NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  NODE_ENV: z.enum(['development', 'production', 'test', 'uat']).default('development'),
   DATABASE_URL: z
     .string()
     .default('postgresql://pavitrasharmna@localhost:5432/hotel_backend?schema=public'),

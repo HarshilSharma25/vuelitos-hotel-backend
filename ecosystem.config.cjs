@@ -77,6 +77,7 @@ module.exports = {
       env_file: '.env',
       env_uat: {
         NODE_ENV: 'uat',
+        PORT: '3002',
       },
       error_file: './logs/pm2-hotel-api-error-uat.log',
       out_file: './logs/pm2-hotel-api-out-uat.log',

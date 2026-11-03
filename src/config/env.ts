@@ -1,10 +1,27 @@
 import { z } from 'zod';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+function resolveProjectRoot(): string {
+  let dir = path.dirname(fileURLToPath(import.meta.url));
+  for (;;) {
+    if (fs.existsSync(path.join(dir, 'package.json'))) return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return process.cwd();
+}
+
+const projectRoot = resolveProjectRoot();
 
 function applyEnvFile(envFileName: string, onlyMissing: boolean) {
-  if (!fs.existsSync(envFileName)) return;
-  const content = fs.readFileSync(envFileName, 'utf8');
+  const envPath = path.isAbsolute(envFileName)
+    ? envFileName
+    : path.join(projectRoot, envFileName);
+  if (!fs.existsSync(envPath)) return;
+  const content = fs.readFileSync(envPath, 'utf8');
   for (const line of content.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;

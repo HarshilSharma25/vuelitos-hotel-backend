@@ -5,7 +5,6 @@ export function generateAccessToken(): { token: string; accessKey: string } {
   const token = crypto.randomBytes(32).toString('base64url');
   const digest = crypto.createHash('sha256').update(token).digest();
   const rawKey = digest.subarray(0, 16);
-  // Format 16 bytes as standard UUID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
   const hex = rawKey.toString('hex');
   const accessKey = `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
   return { token, accessKey };

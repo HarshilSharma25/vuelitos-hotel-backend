@@ -2,6 +2,8 @@ import { Request, Response, NextFunction } from 'express';
 import { ZodError } from 'zod';
 import { AppError } from '../lib/errors.js';
 import crypto from 'node:crypto';
+import { logger } from '../lib/logger.js';
+import { captureException } from '../lib/sentry.js';
 
 export function errorHandler(
   err: any,
@@ -40,7 +42,6 @@ export function errorHandler(
     });
   }
 
-  // Check for multer file limit errors or similar
   if (err.code === 'LIMIT_FILE_SIZE') {
     return res.status(400).json({
       error: {
@@ -51,7 +52,6 @@ export function errorHandler(
     });
   }
 
-  // Prisma Known Request Errors
   if (err?.code === 'P2025') {
     return res.status(404).json({
       error: {
@@ -73,8 +73,8 @@ export function errorHandler(
     });
   }
 
-  // Internal error - NEVER leak internals in message
-  console.error(`[ERROR] [${requestId}]`, err);
+  logger.error({ err, requestId }, 'Internal server error');
+  captureException(err, { requestId });
   return res.status(500).json({
     error: {
       code: 'INTERNAL',

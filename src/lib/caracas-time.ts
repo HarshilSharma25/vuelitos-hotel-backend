@@ -8,8 +8,8 @@ export function toCaracasTime(date: Date): {
   hour: number;
   minute: number;
   second: number;
-  dayOfWeek: number; // 0 = Sunday, 1 = Monday, ..., 6 = Saturday
-  dateString: string; // YYYY-MM-DD
+  dayOfWeek: number;
+  dateString: string;
 } {
   const localMs = date.getTime() + CARACAS_OFFSET_MS;
   const d = new Date(localMs);
@@ -35,8 +35,8 @@ export function getCaracasWallDate(date: Date = new Date()): string {
 }
 
 export function isCaracasBusinessDay(dayOfWeek: number, dateString: string, holidays: Set<string>): boolean {
-  if (dayOfWeek === 0) return false; // Sunday is closed
-  if (holidays.has(dateString)) return false; // Holiday is closed
+  if (dayOfWeek === 0) return false;
+  if (holidays.has(dateString)) return false;
   return true;
 }
 
@@ -53,7 +53,6 @@ export function calculateSlaDueAt(startDate: Date, holidayList: string[] = []): 
   let currentDateString = local.dateString;
 
   const moveToNextDayStart = () => {
-    // Advance 1 day in Caracas time
     const nextDate = new Date(Date.UTC(currentYear, currentMonth - 1, currentDay + 1));
     currentYear = nextDate.getUTCFullYear();
     currentMonth = nextDate.getUTCMonth() + 1;
@@ -64,7 +63,6 @@ export function calculateSlaDueAt(startDate: Date, holidayList: string[] = []): 
     currentMinute = 0;
   };
 
-  // 1. Advance to valid business hours if not currently within
   while (!isCaracasBusinessDay(currentDayOfWeek, currentDateString, holidays)) {
     moveToNextDayStart();
   }
@@ -79,7 +77,6 @@ export function calculateSlaDueAt(startDate: Date, holidayList: string[] = []): 
     }
   }
 
-  // 2. We now have 4 business hours = 240 minutes to consume
   let remainingMinutes = 240;
 
   while (remainingMinutes > 0) {
@@ -88,7 +85,7 @@ export function calculateSlaDueAt(startDate: Date, holidayList: string[] = []): 
     }
 
     const currentMinutesFromMidnight = currentHour * 60 + currentMinute;
-    const closingMinutesFromMidnight = 18 * 60; // 1080
+    const closingMinutesFromMidnight = 18 * 60;
     const availableToday = closingMinutesFromMidnight - currentMinutesFromMidnight;
 
     if (remainingMinutes <= availableToday) {

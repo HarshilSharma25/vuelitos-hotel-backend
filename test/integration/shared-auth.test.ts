@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import request from 'supertest';
 import { app } from '../../src/app.js';
 import { prisma } from '../../src/lib/prisma.js';
+import { setPublicKeyOverride } from '../../src/lib/jwt.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import * as jose from 'jose';
@@ -106,9 +107,15 @@ describe('Shared Authentication & Authorization Integration', () => {
       });
     }
 
-    // 2. Load private key to sign Flight-Backend-compatible tokens
-    const privPem = fs.readFileSync(path.resolve('../Flight-Booking-Backend/certs/jwt-private.pem'), 'utf8');
-    privateKey = await jose.importPKCS8(privPem, 'RS256');
+    // 2. Load private key to sign Flight-Backend-compatible tokens, or generate dynamically
+    if (process.env.HOTEL_TEST_USE_FLIGHT_KEY === '1') {
+      const privPem = fs.readFileSync(path.resolve('../Flight-Booking-Backend/certs/jwt-private.pem'), 'utf8');
+      privateKey = await jose.importPKCS8(privPem, 'RS256');
+    } else {
+      const { publicKey, privateKey: generatedPrivKey } = await jose.generateKeyPair('RS256');
+      privateKey = generatedPrivKey;
+      setPublicKeyOverride(publicKey);
+    }
 
     // 3. Generate tokens simulating Flight Backend issuance
     const now = Math.floor(Date.now() / 1000);
@@ -297,8 +304,8 @@ describe('Shared Authentication & Authorization Integration', () => {
         .set('Authorization', `Bearer ${customer1Token}`);
 
       expect(res.status).toBe(200);
-      expect(Array.isArray(res.body.data)).toBe(true);
-      const found = res.body.data.find((b: any) => b.code === customer1BookingCode);
+      expect(Array.isArray(res.body.data.items)).toBe(true);
+      const found = res.body.data.items.find((b: any) => b.code === customer1BookingCode);
       expect(found).toBeDefined();
     });
 
@@ -308,8 +315,8 @@ describe('Shared Authentication & Authorization Integration', () => {
         .set('Authorization', `Bearer ${customer2Token}`);
 
       expect(res.status).toBe(200);
-      expect(Array.isArray(res.body.data)).toBe(true);
-      const found = res.body.data.find((b: any) => b.code === customer1BookingCode);
+      expect(Array.isArray(res.body.data.items)).toBe(true);
+      const found = res.body.data.items.find((b: any) => b.code === customer1BookingCode);
       expect(found).toBeUndefined();
     });
 
@@ -550,6 +557,43 @@ describe('Shared Authentication & Authorization Integration', () => {
       });
       // external userId must be 101 from verified JWT subject, NOT spoofed-999
       expect(dbBooking?.userId).toBe('101');
+    });
+
+    it('guest booking with spoofed body userId ignores it and keeps userId null', async () => {
+      const res = await request(app)
+        .post('/api/v1/bookings')
+        .send({
+          userId: 'attacker-spoofed-user-id',
+          items: [
+            {
+              type: 'hotel_stay',
+              hotel_slug: 'hotel-shared-auth',
+              check_in: '2026-11-20',
+              check_out: '2026-11-22',
+              meal_plan: 'desayuno',
+              room_selections: [
+                {
+                  room_type_id: testRoomTypeId,
+                  adults: 2,
+                  children: 0,
+                  child_ages: [],
+                },
+              ],
+            },
+          ],
+          contact: {
+            name: 'Spoof Guest',
+            email: 'spoofguest@vuelitos.com',
+          },
+          terms_accepted: true,
+        });
+
+      expect(res.status).toBe(201);
+      const bookingCode = res.body.data.code;
+      const dbBooking = await prisma.booking.findUnique({
+        where: { code: bookingCode },
+      });
+      expect(dbBooking?.userId).toBeNull();
     });
 
     it('allows authenticated customer to report payment without passing body token', async () => {

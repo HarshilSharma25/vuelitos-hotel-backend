@@ -1,5 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { redis } from '../lib/redis.js';
+import { env } from '../config/env.js';
+import { logger } from '../lib/logger.js';
 import { RateLimitedError } from '../lib/errors.js';
 
 export interface RateLimitOptions {
@@ -23,8 +25,7 @@ export function rateLimit(options: RateLimitOptions) {
   return async (req: Request, res: Response, next: NextFunction) => {
     try {
       const clientIp =
-        (req.headers['cf-connecting-ip'] as string) ||
-        (req.headers['x-forwarded-for'] as string)?.split(',')[0].trim() ||
+        (env.TRUST_CF_CONNECTING_IP ? (req.headers['cf-connecting-ip'] as string) : undefined) ||
         req.ip ||
         '127.0.0.1';
 
@@ -32,7 +33,7 @@ export function rateLimit(options: RateLimitOptions) {
       const redisKey = `ratelimit:${options.bucket}:${keyPart}`;
 
       if (redis.status !== 'ready' && redis.status !== 'connect') {
-        // If redis is not ready, proceed in test/dev
+        logger.error({ status: redis.status }, 'Rate limiter Redis not ready, failing open');
         return next();
       }
 
@@ -56,8 +57,7 @@ export function rateLimit(options: RateLimitOptions) {
       if (err instanceof RateLimitedError) {
         return next(err);
       }
-      // If Redis has an issue, do not block the user unless necessary
-      console.warn('Rate limiter error, skipping limit check:', err);
+      logger.error({ err }, 'Rate limiter Redis failure, failing open');
       next();
     }
   };

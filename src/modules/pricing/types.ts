@@ -25,6 +25,9 @@ export interface RateInput {
   occupancy: number | null;
   pricingUnit: PricingUnit;
   netRate: number | string | Rational;
+  percentOfAdult?: number | string | Rational | null;
+  childAgeMin?: number | null;
+  childAgeMax?: number | null;
   daysOfWeek: number[];
   minNights: number;
   maxNights: number | null;
@@ -36,8 +39,8 @@ export interface SeasonInput {
   hotelId: string;
   name: string;
   priority: number;
-  dateFrom: string; // YYYY-MM-DD
-  dateTo: string;   // YYYY-MM-DD (inclusive of last covered night)
+  dateFrom: string;
+  dateTo: string;
   bookingFrom: string | null;
   bookingTo: string | null;
   isActive: boolean;

@@ -61,7 +61,6 @@ export async function runCatalogFixes(fixes: CatalogFix[]): Promise<{ fixId: str
         })),
       }));
 
-      // 1. Assertion before
       const firstRoom = hotel.rooms[0];
       const firstSeason = hotel.seasons[0];
       const firstMeal = firstSeason?.rates[0]?.mealPlan || 'desayuno';
@@ -81,12 +80,10 @@ export async function runCatalogFixes(fixes: CatalogFix[]): Promise<{ fixId: str
         );
       }
 
-      // 2. Run fix in its own transaction
       await prisma.$transaction(async (tx) => {
         await fix.apply(tx);
       });
 
-      // 3. Assertion after
       const updatedHotel = await prisma.hotel.findUnique({
         where: { slug: fix.hotelSlug },
         include: {

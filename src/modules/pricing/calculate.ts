@@ -54,9 +54,7 @@ export function calculateMoneyFromBase(
   const ivaRat = Rational.from(1).add(Rational.from(ivaRateBs));
   const binanceRat = Rational.from(binanceUsdt);
 
-  // bs = base * BCV(base) * (1 + iva_bs)
   const bsRat = base.mul(bcvRat).mul(ivaRat);
-  // usdt = bs / binance_usdt
   const usdtRat = bsRat.div(binanceRat);
 
   return {

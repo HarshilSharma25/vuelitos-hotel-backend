@@ -30,7 +30,6 @@ export function priceByPaymentMethod(
     ruleMap.set(r.method, r);
   }
 
-  // Find iva rate for pago_movil/bs if available, default 0.16
   const pmRule = ruleMap.get('pago_movil');
   const ivaPagoMovil = pmRule?.ivaRate ?? 0.16;
 
@@ -52,7 +51,6 @@ export function priceByPaymentMethod(
     const rule = ruleMap.get(method);
     if (!rule) continue;
 
-    // Solo-divisas hotels get no VES rows
     if (isSoloDivisas && (method === 'pago_movil' || method === 'bs_transfer')) {
       continue;
     }
@@ -66,12 +64,10 @@ export function priceByPaymentMethod(
       if (!bcv) continue;
       const bcvRat = Rational.fromNumber(bcv);
 
-      // base x BCV(base), then x (1 + iva)
       const preIva = base.mul(bcvRat);
       const amountRat = preIva.mul(ivaRat);
       const ivaAmountRat = preIva.mul(ivaOnlyRat);
 
-      // USD equivalent: divide amount by bcvUsd
       const bcvUsdRat = Rational.fromNumber(bcvUsd ?? bcv);
       const usdEquiv = amountRat.div(bcvUsdRat);
 
@@ -89,7 +85,6 @@ export function priceByPaymentMethod(
       let exchUsed: number | null = null;
       if (baseCurrency === 'EUR') {
         if (!bcvEur || !bcvUsd) continue;
-        // base x BCV(base) / BCV(target)
         exchUsed = bcvEur / bcvUsd;
         targetBase = base.mul(Rational.fromNumber(bcvEur)).div(Rational.fromNumber(bcvUsd));
       }
@@ -111,7 +106,6 @@ export function priceByPaymentMethod(
       let exchUsed: number | null = null;
       if (baseCurrency === 'USD') {
         if (!bcvEur || !bcvUsd) continue;
-        // base x BCV(base) / BCV(target)
         exchUsed = bcvUsd / bcvEur;
         targetBase = base.mul(Rational.fromNumber(bcvUsd)).div(Rational.fromNumber(bcvEur));
       }
@@ -119,7 +113,6 @@ export function priceByPaymentMethod(
       const amountRat = targetBase.mul(ivaRat);
       const ivaAmountRat = targetBase.mul(ivaOnlyRat);
 
-      // USD equiv for EUR: amount * bcvEur / bcvUsd
       const usdEquiv = bcvEur && bcvUsd
         ? amountRat.mul(Rational.fromNumber(bcvEur)).div(Rational.fromNumber(bcvUsd))
         : amountRat;
@@ -159,7 +152,6 @@ export function priceByPaymentMethod(
       });
     } else if (method === 'usdt_binance') {
       if (isSoloDivisas) {
-        // Solo-divisas: base 1:1, no bs, no iva
         rows.push({
           method,
           currency: 'USDT',
@@ -173,7 +165,6 @@ export function priceByPaymentMethod(
         const bcv = baseCurrency === 'USD' ? bcvUsd : bcvEur;
         if (!bcv || !binanceUsdt) continue;
 
-        // base x BCV(base) x (1 + iva_pago_movil) / binance
         const bcvRat = Rational.from(bcv);
         const ivaRatPM = Rational.from(1).add(Rational.from(ivaPagoMovil));
         const binanceRat = Rational.from(binanceUsdt);
@@ -193,7 +184,6 @@ export function priceByPaymentMethod(
     }
   }
 
-  // Find lowest USD equivalent
   let minUsdRat: Rational | null = null;
   for (const r of rows) {
     if (minUsdRat === null || r.usdEquiv.cmp(minUsdRat) < 0) {

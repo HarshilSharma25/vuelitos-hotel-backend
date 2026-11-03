@@ -319,9 +319,10 @@ describe('Comprehensive Seed Data & State Machine Query Verification', () => {
         .set('Authorization', `Bearer ${customer1Token}`);
 
       expect(c1Res.status).toBe(200);
-      expect(Array.isArray(c1Res.body.data)).toBe(true);
-      expect(c1Res.body.data.length).toBeGreaterThanOrEqual(4);
-      const c1Codes = c1Res.body.data.map((b: any) => b.code);
+      const c1Items = Array.isArray(c1Res.body.data) ? c1Res.body.data : c1Res.body.data.items;
+      expect(Array.isArray(c1Items)).toBe(true);
+      expect(c1Items.length).toBeGreaterThanOrEqual(4);
+      const c1Codes = c1Items.map((b: any) => b.code);
       expect(c1Codes).toContain('VH-2026-000102');
       expect(c1Codes).toContain('VH-2026-000106');
       expect(c1Codes).toContain('VH-2026-000108');
@@ -335,7 +336,9 @@ describe('Comprehensive Seed Data & State Machine Query Verification', () => {
         .set('Authorization', `Bearer ${customer2Token}`);
 
       expect(c2Res.status).toBe(200);
-      const c2Codes = c2Res.body.data.map((b: any) => b.code);
+      const c2Items = Array.isArray(c2Res.body.data) ? c2Res.body.data : c2Res.body.data.items;
+      expect(Array.isArray(c2Items)).toBe(true);
+      const c2Codes = c2Items.map((b: any) => b.code);
       expect(c2Codes).toContain('VH-2026-000103');
       expect(c2Codes).toContain('VH-2026-000107');
       expect(c2Codes).toContain('VH-2026-000110');

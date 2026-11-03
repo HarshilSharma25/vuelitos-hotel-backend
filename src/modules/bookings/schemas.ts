@@ -1,5 +1,18 @@
 import { z } from 'zod';
 import { moneySchema, methodTotalSchema } from '../catalog/schemas.js';
+import { env } from '../../config/env.js';
+
+export const paymentMethodsList = [
+  'stripe_card',
+  'pago_movil',
+  'bs_transfer',
+  'zelle',
+  'usdt_binance',
+  'cash_usd',
+  'cash_eur',
+] as const;
+
+export const paymentMethodSchema = z.enum(paymentMethodsList);
 
 export const bookingCreateItemSchema = z.object({
   type: z.literal('hotel_stay'),
@@ -20,6 +33,17 @@ export const bookingCreateItemSchema = z.object({
     .max(10),
 });
 
+export const guestDetailsSchema = z.object({
+  country: z.string().trim().max(100).optional(),
+  booking_for_someone_else: z.boolean().optional(),
+  guest_name: z.string().trim().max(100).optional(),
+  guest_first_name: z.string().trim().max(50).optional(),
+  guest_last_name: z.string().trim().max(50).optional(),
+  travel_purpose: z.enum(['leisure', 'work']).optional(),
+  estimated_arrival_time: z.string().trim().max(50).optional(),
+  special_requests: z.string().trim().max(1000).optional(),
+});
+
 export const bookingCreateSchema = z.object({
   items: z.array(bookingCreateItemSchema).min(1).max(5),
   contact: z.object({
@@ -28,27 +52,20 @@ export const bookingCreateSchema = z.object({
     phone: z.string().trim().max(30).optional(),
   }),
   locale: z.enum(['es', 'en']).default('es'),
-  payment_method: z
-    .enum([
-      'stripe_card',
-      'pago_movil',
-      'bs_transfer',
-      'zelle',
-      'usdt_binance',
-      'cash_usd',
-      'cash_eur',
-    ])
-    .optional(),
+  payment_method: paymentMethodSchema.optional(),
   notes: z.string().trim().max(1000).optional(),
   terms_accepted: z.literal(true),
-  website: z.string().optional().default(''), // Honeypot
+  guest_details: guestDetailsSchema.optional(),
+  checkout_mode: z.enum(['pay_now', 'pay_at_hotel']).optional(),
+  website: z.string().optional().default(''),
 });
 
 export const bookingCreatedResponseSchema = z.object({
   code: z.string(),
   access_token: z.string(),
-  status: z.literal('requested'),
-  sla_due_at: z.string(),
+  status: z.enum(['requested', 'awaiting_payment']),
+  payment_mode: z.enum(['online', 'at_hotel']).optional(),
+  sla_due_at: z.string().nullable().optional(),
 });
 
 export const bookingPublicViewSchema = z.object({
@@ -68,6 +85,7 @@ export const bookingPublicViewSchema = z.object({
   ]),
   status_label: z.string(),
   status_description: z.string(),
+  payment_mode: z.enum(['online', 'at_hotel']).optional(),
   sla_due_at: z.string().nullable(),
   payment_due_at: z.string().nullable(),
   contact: z.object({
@@ -120,7 +138,16 @@ export const bookingPublicViewSchema = z.object({
       currency: z.enum(['VES', 'USD', 'EUR', 'USDT']),
       amount: z.number(),
       reference: z.string(),
-      status: z.enum(['submitted', 'verified', 'rejected', 'refunded']),
+      status: z.enum([
+        'pending',
+        'submitted',
+        'verified',
+        'rejected',
+        'needs_review',
+        'expired',
+        'failed',
+        'refunded',
+      ]),
       submitted_at: z.string(),
     })
   ),
@@ -131,24 +158,81 @@ export const bookingPublicViewSchema = z.object({
       label: z.string(),
     })
   ),
-  allowed_actions: z.array(z.enum(['report_payment', 'cancel'])),
+  guest_details: guestDetailsSchema.nullable().optional(),
+  payment_status: z.enum([
+    'unpaid',
+    'pending_verification',
+    'paid',
+    'pay_at_hotel',
+    'refund_pending',
+    'refunded',
+    'not_applicable',
+  ]),
+  refund_status: z.enum([
+    'none',
+    'submitted',
+    'in_review',
+    'needs_info',
+    'approved',
+    'rejected',
+    'completed',
+  ]),
+  has_confirmation_document: z.boolean(),
+  allowed_actions: z.array(z.enum(['report_payment', 'cancel', 'request_refund'])),
   created_at: z.string(),
+});
+
+export const bookingListResponseSchema = z.object({
+  items: z.array(
+    z.object({
+      id: z.string(),
+      code: z.string(),
+      status: bookingPublicViewSchema.shape.status,
+      status_label: z.string(),
+      payment_status: bookingPublicViewSchema.shape.payment_status,
+      refund_status: bookingPublicViewSchema.shape.refund_status,
+      hotel_name: z.string(),
+      hotel_cover_image: z.string().nullable(),
+      city: z.string(),
+      check_in: z.string().nullable(),
+      check_out: z.string().nullable(),
+      guests: z.number(),
+      total: z.number().nullable(),
+      currency: z.string().nullable(),
+      sla_due_at: z.string().nullable(),
+      allowed_actions: bookingPublicViewSchema.shape.allowed_actions,
+      has_confirmation_document: z.boolean(),
+      created_at: z.string(),
+    })
+  ),
+  next_cursor: z.string().nullable(),
+});
+
+export const claimBookingSchema = z.object({
+  access_token: z.string().min(10),
+});
+
+export const bookingStatusResponseSchema = z.object({
+  code: z.string(),
+  status: z.string(),
+  status_label: z.string(),
+  payment_mode: z.enum(['online', 'at_hotel']),
+  sla_due_at: z.string().nullable(),
+  updated_at: z.string(),
+  allowed_actions: z.array(z.string()),
 });
 
 export const reportPaymentSchema = z.object({
   token: z.string().min(10).optional(),
-  method: z.enum([
-    'stripe_card',
-    'pago_movil',
-    'bs_transfer',
-    'zelle',
-    'usdt_binance',
-    'cash_usd',
-    'cash_eur',
-  ]),
+  method: paymentMethodSchema,
   reference: z.string().trim().min(1).max(100),
 });
 
 export const cancelBookingSchema = z.object({
   token: z.string().min(10).optional(),
+});
+
+export const stripeSessionResponseSchema = z.object({
+  checkout_url: z.string(),
+  expires_at: z.number(),
 });

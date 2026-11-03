@@ -8,7 +8,6 @@ export function calculateIqrMedian(prices: number[]): number {
 
   if (n === 1) return Number(sorted[0].toFixed(4));
 
-  // Compute quartiles
   const getPercentile = (p: number): number => {
     const idx = (n - 1) * p;
     const lower = Math.floor(idx);
@@ -28,7 +27,6 @@ export function calculateIqrMedian(prices: number[]): number {
   const m = filtered.length;
 
   if (m === 0) {
-    // Fallback if all were somehow filtered out
     return Number(sorted[Math.floor(n / 2)].toFixed(4));
   }
 

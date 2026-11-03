@@ -20,19 +20,16 @@ export class RatesService {
         return JSON.parse(cached);
       }
     } catch {
-      // Redis error should not block database read
     }
 
     const todayCaracas = getCaracasWallDate();
     const todayDate = new Date(`${todayCaracas}T00:00:00Z`);
 
-    // 1. Fetch latest manual override
     const manualRate = await prisma.exchangeRate.findFirst({
       where: { isManualOverride: true },
       orderBy: { recordedAt: 'desc' },
     });
 
-    // 2. Fetch latest auto rate with valueDate <= today Caracas
     const autoRate = await prisma.exchangeRate.findFirst({
       where: {
         isManualOverride: false,
@@ -41,7 +38,6 @@ export class RatesService {
       orderBy: { recordedAt: 'desc' },
     });
 
-    // Determine which rate applies: newest auto unless newer manual override exists
     let chosen = autoRate;
     if (manualRate) {
       if (!autoRate || manualRate.recordedAt >= autoRate.recordedAt) {
@@ -79,7 +75,6 @@ export class RatesService {
     try {
       await redis.set('exchange:latest', JSON.stringify(result), 'EX', 60);
     } catch {
-      // Ignore Redis caching error
     }
 
     return result;
@@ -111,7 +106,6 @@ export class RatesService {
     try {
       await redis.del('exchange:latest');
     } catch {
-      // Ignore
     }
 
     return this.getLatestEffectiveRates();
@@ -121,7 +115,6 @@ export class RatesService {
     try {
       await redis.incr('catalog:version');
     } catch {
-      // Ignore
     }
   }
 }

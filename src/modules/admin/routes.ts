@@ -11,8 +11,11 @@ import {
   NotFoundError,
   ValidationError,
 } from '../../lib/errors.js';
-import { transition } from '../bookings/state-machine.js';
+import { ActorType, normalizeEventName, transition, getAllowedActions, getAdminAllowedActions } from '../bookings/state-machine.js';
+import type { PaymentMethod } from '../pricing/types.js';
 import { ratesService } from '../rates/service.js';
+import { bookingService } from '../bookings/service.js';
+import { settingsService } from '../settings/service.js';
 import { adminAuthRouter } from './auth.js';
 import { fileStorage } from '../files/storage.js';
 import { generateQuoteCode } from '../../lib/ids.js';
@@ -21,15 +24,176 @@ import sharp from 'sharp';
 import { imageUploadMiddleware } from '../../middleware/upload.js';
 import { tarifarioService } from '../tarifario/service.js';
 import { env } from '../../config/env.js';
+import { recordBookingTransition } from '../../lib/metrics.js';
+import { BookingStatus, Role } from '@prisma/client';
+import { adminRefundService } from '../refunds/admin-service.js';
+import { refundUploadMiddleware } from '../../middleware/refund-upload.js';
+import { notifyBookingStatusChange } from '../notifications/booking-events.js';
+
+function refundActor(user: { id: string; role: string }) {
+  return { id: user.id, role: user.role as Role };
+}
 
 export const adminRouter = Router();
 
-// Mount auth router
 adminRouter.use(adminAuthRouter);
 
-// ----------------------------------------------------
-// BOOKINGS (Role: agent)
-// ----------------------------------------------------
+
+adminRouter.get('/bookings/inbox', requireRole('agent'), async (req, res, next) => {
+  try {
+    const { status, hotelId, paymentMode, overdue, search, q, page = '1', limit = '20' } = req.query as any;
+
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const take = Math.min(100, Math.max(1, parseInt(limit, 10) || 20));
+    const skip = (pageNum - 1) * take;
+
+    const where: any = {};
+    if (status && status !== 'all') {
+      where.status = status;
+    }
+    if (paymentMode) {
+      where.paymentMode = paymentMode;
+    }
+    if (hotelId) {
+      where.items = { some: { hotelId } };
+    }
+    const queryTerm = search || q;
+    if (queryTerm) {
+      where.OR = [
+        { code: { contains: queryTerm, mode: 'insensitive' } },
+        { contactName: { contains: queryTerm, mode: 'insensitive' } },
+        { contactEmail: { contains: queryTerm, mode: 'insensitive' } },
+      ];
+    }
+    if (overdue === 'true') {
+      where.slaDueAt = { lt: new Date() };
+      where.status = { in: ['requested', 'checking_availability', 'awaiting_payment'] };
+    }
+
+    const [bookings, total] = await Promise.all([
+      prisma.booking.findMany({
+        where,
+        orderBy: [
+          { slaDueAt: { sort: 'asc', nulls: 'last' } },
+          { createdAt: 'desc' },
+        ],
+        skip,
+        take,
+        include: {
+          items: true,
+          payments: { orderBy: { submittedAt: 'desc' }, take: 1 },
+        },
+      }),
+      prisma.booking.count({ where }),
+    ]);
+
+    const allWhere = hotelId ? { items: { some: { hotelId } } } : {};
+    const [
+      countAll,
+      countRequested,
+      countChecking,
+      countAwaitingPayment,
+      countPaymentSubmitted,
+      countPaymentVerified,
+      countConfirmed,
+      countOverdue,
+    ] = await Promise.all([
+      prisma.booking.count({ where: allWhere }),
+      prisma.booking.count({ where: { ...allWhere, status: 'requested' } }),
+      prisma.booking.count({ where: { ...allWhere, status: 'checking_availability' } }),
+      prisma.booking.count({ where: { ...allWhere, status: 'awaiting_payment' } }),
+      prisma.booking.count({ where: { ...allWhere, status: 'payment_submitted' } }),
+      prisma.booking.count({ where: { ...allWhere, status: 'payment_verified' } }),
+      prisma.booking.count({ where: { ...allWhere, status: 'confirmed' } }),
+      prisma.booking.count({
+        where: {
+          ...allWhere,
+          slaDueAt: { lt: new Date() },
+          status: { in: ['requested', 'checking_availability', 'awaiting_payment'] },
+        },
+      }),
+    ]);
+
+    const now = Date.now();
+    const hotelIds = [...new Set(bookings.flatMap((b) => b.items.map((i) => i.hotelId)))];
+    const hotels = await prisma.hotel.findMany({
+      where: { id: { in: hotelIds } },
+      select: { id: true, slug: true, name: true, destination: true },
+    });
+    const hotelMap = new Map(hotels.map((h) => [h.id, h]));
+
+    const items = bookings.map((b) => {
+      const msLeft = b.slaDueAt ? b.slaDueAt.getTime() - now : null;
+      const isOverdue = msLeft !== null ? msLeft < 0 : false;
+      const primaryItem = b.items[0];
+      const hotel = primaryItem ? hotelMap.get(primaryItem.hotelId) : null;
+
+      const allowedActions = getAdminAllowedActions(
+        b.status,
+        b.paymentMode as any,
+        primaryItem?.checkIn
+      );
+
+      return {
+        id: b.id,
+        code: b.code,
+        status: b.status,
+        payment_mode: b.paymentMode,
+        paymentMode: b.paymentMode,
+        contact_name: b.contactName,
+        contactEmail: b.contactEmail,
+        contact_phone: b.contactPhone,
+        notes: b.notes,
+        guest_details: (b as any).guestDetails,
+        guestDetails: (b as any).guestDetails,
+        hotel: hotel
+          ? { id: hotel.id, slug: hotel.slug, name: hotel.name, destination: hotel.destination }
+          : null,
+        created_at: b.createdAt.toISOString(),
+        sla_due_at: b.slaDueAt ? b.slaDueAt.toISOString() : null,
+        slaDueAt: b.slaDueAt ? b.slaDueAt.toISOString() : null,
+        sla_minutes_remaining: msLeft !== null ? Math.round(msLeft / 60000) : null,
+        is_overdue: isOverdue,
+        isOverdue,
+        allowed_actions: allowedActions,
+        allowedActions,
+        payments: b.payments,
+      };
+    });
+
+    res.json({
+      data: items,
+      meta: {
+        total,
+        page: pageNum,
+        limit: take,
+        totalPages: Math.ceil(total / take),
+      },
+      status_counts: {
+        all: countAll,
+        requested: countRequested,
+        checking_availability: countChecking,
+        awaiting_payment: countAwaitingPayment,
+        payment_submitted: countPaymentSubmitted,
+        payment_verified: countPaymentVerified,
+        confirmed: countConfirmed,
+        overdue: countOverdue,
+      },
+      statusCounts: {
+        all: countAll,
+        requested: countRequested,
+        checking_availability: countChecking,
+        awaiting_payment: countAwaitingPayment,
+        payment_submitted: countPaymentSubmitted,
+        payment_verified: countPaymentVerified,
+        confirmed: countConfirmed,
+        overdue: countOverdue,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
 
 adminRouter.get('/bookings', requireRole('agent'), async (req, res, next) => {
   try {
@@ -119,10 +283,21 @@ adminRouter.get('/bookings/:code', requireRole('agent'), async (req, res, next) 
       };
     });
 
+    const firstItem = booking.items[0];
+    const allowedActions = getAdminAllowedActions(
+      booking.status,
+      booking.paymentMode as any,
+      firstItem?.checkIn
+    );
+
     res.json({
       data: {
         ...booking,
+        guest_details: (booking as any).guestDetails,
+        guestDetails: (booking as any).guestDetails,
         items: enrichedItems,
+        allowed_actions: allowedActions,
+        allowedActions,
       },
     });
   } catch (err) {
@@ -132,10 +307,12 @@ adminRouter.get('/bookings/:code', requireRole('agent'), async (req, res, next) 
 
 const transitionSchema = z.object({
   event: z.enum([
-    'start_check',
-    'hotel_confirmed',
+    'start_availability_check',
+    'confirm_availability',
+    'confirm_pay_at_hotel',
     'offer_alternatives',
-    'accept_alternative',
+    'choose_alternative',
+    'decline_alternatives',
     'mark_unavailable',
     'submit_payment',
     'verify_payment',
@@ -144,6 +321,10 @@ const transitionSchema = z.object({
     'expire_payment_window',
     'cancel',
     'complete_refund',
+    'approve',
+    'start_check',
+    'hotel_confirmed',
+    'accept_alternative',
   ]),
   note: z.string().max(1000).optional(),
 });
@@ -157,30 +338,61 @@ adminRouter.post(
       const code = req.params.code as string;
       const booking = await prisma.booking.findUnique({
         where: { code },
+        include: { items: true },
       });
 
       if (!booking) {
         throw new NotFoundError(`Booking '${code}' not found`);
       }
 
-      // Check role constraint: complete_refund requires admin
-      if (req.body.event === 'complete_refund' && req.user!.role === 'agent') {
+      if (req.body.event === 'approve') {
+        const approved = await bookingService.approveBooking(code, req.user!, req.body.note);
+        return res.json({ data: approved });
+      }
+
+      const canonicalEvent = normalizeEventName(req.body.event);
+      if (canonicalEvent === 'complete_refund' && req.user!.role === 'agent') {
         throw new ForbiddenError('Admin role required for refund completion');
       }
 
-      const actorType = req.user!.role === 'super_admin' ? 'admin' : (req.user!.role as any);
+      const actorType = req.user!.role as ActorType;
       const nextStep = transition({
         currentStatus: booking.status,
         event: req.body.event,
         actorType,
         actorId: req.user!.id,
         note: req.body.note,
+        paymentMode: booking.paymentMode as any,
       });
 
+      let newSlaDueAt: Date | null | undefined = undefined;
+      let newPaymentWindowHours: number | undefined = undefined;
+
+      if (nextStep.event === 'confirm_availability') {
+        const hotelId = booking.items[0]?.hotelId;
+        const effective = await settingsService.getEffectiveCheckoutSettings(hotelId);
+        const windowHours = booking.paymentWindowHours ?? effective.paymentWindowHours;
+        newSlaDueAt = new Date(Date.now() + windowHours * 3600 * 1000);
+        newPaymentWindowHours = windowHours;
+      } else if (
+        nextStep.event === 'confirm_pay_at_hotel' ||
+        nextStep.toStatus === BookingStatus.confirmed ||
+        nextStep.toStatus === BookingStatus.refund_pending ||
+        nextStep.toStatus === BookingStatus.unavailable ||
+        nextStep.toStatus === BookingStatus.cancelled ||
+        nextStep.toStatus === BookingStatus.refunded
+      ) {
+        newSlaDueAt = null;
+      }
+
       await prisma.$transaction(async (tx) => {
+        const updateData: any = { status: nextStep.toStatus };
+        if (newSlaDueAt !== undefined) updateData.slaDueAt = newSlaDueAt;
+        if (newPaymentWindowHours !== undefined) updateData.paymentWindowHours = newPaymentWindowHours;
+
         const updateResult = await tx.booking.updateMany({
           where: { id: booking.id, status: nextStep.fromStatus },
-          data: { status: nextStep.toStatus },
+          data: updateData,
         });
 
         if (updateResult.count === 0) {
@@ -200,7 +412,10 @@ adminRouter.post(
         });
       });
 
+      recordBookingTransition(nextStep.event);
+
       await ratesService.bumpCatalogCache();
+      await notifyBookingStatusChange(booking.code, nextStep.toStatus);
 
       const updated = await prisma.booking.findUnique({
         where: { id: booking.id },
@@ -214,9 +429,181 @@ adminRouter.post(
   }
 );
 
-// ----------------------------------------------------
-// AVAILABILITY (Role: agent)
-// ----------------------------------------------------
+adminRouter.post('/bookings/:code/approve', requireRole('agent'), async (req, res, next) => {
+  try {
+    const code = req.params.code as string;
+    const updated = await bookingService.approveBooking(code, req.user!, req.body?.note);
+    res.json({ data: updated });
+  } catch (err) {
+    next(err);
+  }
+});
+
+adminRouter.post(
+  '/bookings/bulk-transition',
+  requireRole('agent'),
+  validate({
+    body: z.object({
+      codes: z.array(z.string()).min(1).max(50),
+      event: z.string(),
+      note: z.string().max(1000).optional(),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const { codes, event, note } = req.body;
+      const results: { code: string; success: boolean; error?: string; toStatus?: string }[] = [];
+
+      for (const code of codes) {
+        try {
+          if (event === 'approve') {
+            const updated = await bookingService.approveBooking(code, req.user!, note);
+            results.push({ code, success: true, toStatus: updated.status });
+          } else {
+            const booking = await prisma.booking.findUnique({ where: { code }, include: { items: true } });
+            if (!booking) {
+              results.push({ code, success: false, error: 'Booking not found' });
+              continue;
+            }
+            const actorType = req.user!.role as ActorType;
+            const nextStep = transition({
+              currentStatus: booking.status,
+              event,
+              actorType,
+              actorId: req.user!.id,
+              note,
+              paymentMode: booking.paymentMode as any,
+            });
+
+            let newSlaDueAt: Date | null | undefined = undefined;
+            if (nextStep.event === 'confirm_availability') {
+              const hotelId = booking.items[0]?.hotelId;
+              const effective = await settingsService.getEffectiveCheckoutSettings(hotelId);
+              newSlaDueAt = new Date(Date.now() + (booking.paymentWindowHours ?? effective.paymentWindowHours) * 3600 * 1000);
+            } else if (nextStep.event === 'confirm_pay_at_hotel') {
+              newSlaDueAt = null;
+            }
+
+            await prisma.$transaction(async (tx) => {
+              const updateData: any = { status: nextStep.toStatus };
+              if (newSlaDueAt !== undefined) updateData.slaDueAt = newSlaDueAt;
+
+              await tx.booking.update({
+                where: { id: booking.id },
+                data: updateData,
+              });
+
+              await tx.bookingEvent.create({
+                data: {
+                  bookingId: booking.id,
+                  event: nextStep.event,
+                  fromStatus: nextStep.fromStatus,
+                  toStatus: nextStep.toStatus,
+                  actorType: nextStep.actorType,
+                  actorId: req.user!.id,
+                  note: nextStep.note || null,
+                },
+              });
+            });
+            recordBookingTransition(nextStep.event);
+            results.push({ code, success: true, toStatus: nextStep.toStatus });
+          }
+        } catch (err: any) {
+          results.push({ code, success: false, error: err.message });
+        }
+      }
+
+      await ratesService.bumpCatalogCache();
+      res.json({ data: { results } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+adminRouter.post(
+  '/bookings/:code/extend-payment-window',
+  requireRole('agent'),
+  validate({
+    body: z.object({
+      additionalHours: z.number().int().positive().max(168),
+      note: z.string().trim().min(1).max(1000),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const code = req.params.code as string;
+      const { additionalHours, note } = req.body;
+      const updated = await bookingService.extendPaymentWindow(code, additionalHours, note, req.user!);
+      res.json({
+        data: {
+          ...updated,
+          payment_window_hours: updated.paymentWindowHours,
+          reminders_sent: updated.remindersSent,
+          sla_due_at: updated.slaDueAt ? updated.slaDueAt.toISOString() : null,
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+adminRouter.post(
+  '/bookings/:code/verify-payment',
+  requireRole('agent'),
+  async (req, res, next) => {
+    try {
+      const code = req.params.code as string;
+      const updated = await bookingService.verifyPayment(code, req.body || {}, req.user!);
+      res.json({ data: updated });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+adminRouter.post(
+  '/bookings/:code/reject-payment',
+  requireRole('agent'),
+  validate({
+    body: z.object({
+      paymentId: z.string().optional(),
+      reason: z.string().min(1).max(200),
+      notes: z.string().max(1000).optional(),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const code = req.params.code as string;
+      const updated = await bookingService.rejectPayment(code, req.body, req.user!);
+      res.json({ data: updated });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+adminRouter.get(
+  '/bookings/:code/check-duplicate-reference',
+  requireRole('agent'),
+  async (req, res, next) => {
+    try {
+      const code = req.params.code as string;
+      const booking = await prisma.booking.findUnique({ where: { code } });
+      if (!booking) throw new NotFoundError(`Booking '${code}' not found`);
+
+      const method = req.query.method as PaymentMethod;
+      const reference = (req.query.reference as string) || '';
+
+      const check = await bookingService.checkDuplicateReference(method, reference, booking.id);
+      res.json({ data: check });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 
 const availabilityCheckSchema = z
   .object({
@@ -282,9 +669,6 @@ adminRouter.post(
   }
 );
 
-// ----------------------------------------------------
-// HOTELS & CATALOG MANAGEMENT (Role: admin)
-// ----------------------------------------------------
 
 function normalizeHotelInput(body: any) {
   if (!body || typeof body !== 'object') return {};
@@ -359,7 +743,6 @@ function normalizeHotelInput(body: any) {
     data.coverImageUrl = (body.coverImageUrl ?? body.cover_image_url) || null;
   }
 
-  // Auto-resolve coverImageUrl if key was provided but URL was not
   if (data.coverImageKey && !data.coverImageUrl) {
     data.coverImageUrl = data.coverImageKey.startsWith('http://') || data.coverImageKey.startsWith('https://')
       ? data.coverImageKey
@@ -550,7 +933,6 @@ adminRouter.patch('/hotels/:id', requireRole('admin'), async (req, res, next) =>
   }
 });
 
-// Rooms
 adminRouter.get('/hotels/:id/rooms', requireRole('admin'), async (req, res, next) => {
   try {
     const rooms = await prisma.roomType.findMany({ where: { hotelId: req.params.id as string } });
@@ -611,7 +993,6 @@ adminRouter.patch('/hotels/:id/rooms/:roomId', requireRole('admin'), async (req,
   }
 });
 
-// Seasons
 adminRouter.get('/hotels/:id/seasons', requireRole('admin'), async (req, res, next) => {
   try {
     const seasons = await prisma.season.findMany({
@@ -690,7 +1071,6 @@ adminRouter.patch('/hotels/:id/seasons/:seasonId', requireRole('admin'), async (
   }
 });
 
-// Rates - deactivated and NEVER deleted
 adminRouter.get('/hotels/:id/rates', requireRole('admin'), async (req, res, next) => {
   try {
     const rates = await prisma.rate.findMany({
@@ -787,7 +1167,6 @@ adminRouter.patch('/rates/:id', requireRole('admin'), async (req, res, next) => 
   }
 });
 
-// Payment Rules
 adminRouter.put('/hotels/:id/payment-methods', requireRole('admin'), async (req, res, next) => {
   try {
     const id = req.params.id as string;
@@ -806,7 +1185,6 @@ adminRouter.put('/hotels/:id/payment-methods', requireRole('admin'), async (req,
         if (!Number.isFinite(ivaRate) || ivaRate < 0) {
           throw new ValidationError(`Invalid iva_rate for method ${m.method}`);
         }
-        // Accept fraction (0.16) or whole percent (16) from admin UI
         if (ivaRate > 1) {
           ivaRate = ivaRate / 100;
         }
@@ -834,7 +1212,6 @@ adminRouter.put('/hotels/:id/payment-methods', requireRole('admin'), async (req,
   }
 });
 
-// Images
 adminRouter.post(
   '/hotels/:id/images',
   requireRole('admin'),
@@ -846,7 +1223,6 @@ adminRouter.post(
       if (!hotel) throw new NotFoundError('Hotel not found');
 
       const imageId = crypto.randomUUID();
-      // Process with sharp: resize inside 1600x1600, webp, strip EXIF
       const webpBuffer = await sharp(req.file!.buffer)
         .rotate()
         .resize(1600, 1600, { fit: 'inside', withoutEnlargement: true })
@@ -976,9 +1352,6 @@ adminRouter.delete('/images/:id', requireRole('admin'), async (req, res, next) =
   }
 });
 
-// ----------------------------------------------------
-// EXCHANGE RATES (Role: admin)
-// ----------------------------------------------------
 
 adminRouter.get('/exchange-rates', requireRole('admin'), async (_req, res, next) => {
   try {
@@ -1017,9 +1390,6 @@ adminRouter.post('/exchange-rates/manual', requireRole('admin'), async (req, res
   }
 });
 
-// ----------------------------------------------------
-// HOLIDAYS (Role: admin)
-// ----------------------------------------------------
 
 adminRouter.get('/holidays', requireRole('admin'), async (_req, res, next) => {
   try {
@@ -1052,9 +1422,6 @@ adminRouter.delete('/holidays/:date', requireRole('admin'), async (req, res, nex
   }
 });
 
-// ----------------------------------------------------
-// QUOTES (Role: agent)
-// ----------------------------------------------------
 
 adminRouter.get('/quotes', requireRole('agent'), async (_req, res, next) => {
   try {
@@ -1138,9 +1505,6 @@ adminRouter.patch('/quotes/:id', requireRole('agent'), async (req, res, next) =>
   }
 });
 
-// ----------------------------------------------------
-// TARIFARIO (Role: admin)
-// ----------------------------------------------------
 
 adminRouter.post('/tarifario/imports', requireRole('admin'), async (req, res, next) => {
   try {
@@ -1161,9 +1525,6 @@ adminRouter.post('/tarifario/imports/:id/commit', requireRole('admin'), async (r
   }
 });
 
-// ----------------------------------------------------
-// USERS (Role: super_admin)
-// ----------------------------------------------------
 
 adminRouter.get('/users', requireRole('super_admin'), async (_req, res, next) => {
   try {
@@ -1215,9 +1576,298 @@ adminRouter.post('/users/:id/reset-password', requireRole('super_admin'), async 
       where: { id },
       data: { passwordHash: hash },
     });
-    // Revoke all sessions for this user
     await prisma.session.deleteMany({ where: { userId: id } });
     res.json({ data: { success: true } });
+  } catch (err) {
+    next(err);
+  }
+});
+
+
+const checkoutSettingsUpdateSchema = z.object({
+  pay_now_enabled: z.boolean().optional(),
+  payNowEnabled: z.boolean().optional(),
+  pay_at_hotel_enabled: z.boolean().optional(),
+  payAtHotelEnabled: z.boolean().optional(),
+  card_payments_enabled: z.boolean().optional(),
+  cardPaymentsEnabled: z.boolean().optional(),
+  payment_window_hours: z.number().int().min(1).max(168).optional(),
+  paymentWindowHours: z.number().int().min(1).max(168).optional(),
+  reminder_offsets_pct: z.array(z.number().int().min(1).max(99)).optional(),
+  reminderOffsetsPct: z.array(z.number().int().min(1).max(99)).optional(),
+  auto_confirm_after_payment: z.boolean().optional(),
+  autoConfirmAfterPayment: z.boolean().optional(),
+});
+
+function formatCheckoutSettingsResponse(settings: any) {
+  return {
+    ...settings,
+    pay_now_enabled: settings.payNowEnabled,
+    pay_at_hotel_enabled: settings.payAtHotelEnabled,
+    card_payments_enabled: settings.cardPaymentsEnabled,
+    payment_window_hours: settings.paymentWindowHours,
+    reminder_offsets_pct: settings.reminderOffsetsPct,
+    auto_confirm_after_payment: settings.autoConfirmAfterPayment,
+  };
+}
+
+adminRouter.get('/settings/checkout', requireRole('agent'), async (_req, res, next) => {
+  try {
+    const settings = await settingsService.getGlobalCheckoutSettings();
+    res.json({ data: formatCheckoutSettingsResponse(settings) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+adminRouter.put(
+  '/settings/checkout',
+  requireRole('admin'),
+  validate({ body: checkoutSettingsUpdateSchema }),
+  async (req, res, next) => {
+    try {
+      const payNowEnabled = req.body.payNowEnabled ?? req.body.pay_now_enabled;
+      const payAtHotelEnabled = req.body.payAtHotelEnabled ?? req.body.pay_at_hotel_enabled;
+      const cardPaymentsEnabled = req.body.cardPaymentsEnabled ?? req.body.card_payments_enabled;
+      const paymentWindowHours = req.body.paymentWindowHours ?? req.body.payment_window_hours;
+      const reminderOffsetsPct = req.body.reminderOffsetsPct ?? req.body.reminder_offsets_pct;
+      const autoConfirmAfterPayment = req.body.autoConfirmAfterPayment ?? req.body.auto_confirm_after_payment;
+
+      const updated = await settingsService.updateGlobalCheckoutSettings(
+        {
+          payNowEnabled,
+          payAtHotelEnabled,
+          cardPaymentsEnabled,
+          paymentWindowHours,
+          reminderOffsetsPct,
+          autoConfirmAfterPayment,
+        },
+        { id: req.user!.id, type: req.user!.role }
+      );
+
+      res.json({ data: formatCheckoutSettingsResponse(updated) });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+adminRouter.get('/hotels/:id/checkout-options', requireRole('agent'), async (req, res, next) => {
+  try {
+    const options = await settingsService.getHotelCheckoutOptions(req.params.id as string);
+    res.json({
+      data: {
+        overrides: {
+          ...options.overrides,
+          pay_now_enabled: options.overrides.payNowEnabled,
+          pay_at_hotel_enabled: options.overrides.payAtHotelEnabled,
+          payment_window_hours: options.overrides.paymentWindowHours,
+          reminder_offsets_pct: options.overrides.reminderOffsetsPct,
+          auto_confirm_after_payment: options.overrides.autoConfirmAfterPayment,
+        },
+        effective: {
+          ...options.effective,
+          pay_now_enabled: options.effective.payNowEnabled,
+          pay_at_hotel_enabled: options.effective.payAtHotelEnabled,
+          card_payments_enabled: options.effective.cardPaymentsEnabled,
+          payment_window_hours: options.effective.paymentWindowHours,
+          reminder_offsets_pct: options.effective.reminderOffsetsPct,
+          auto_confirm_after_payment: options.effective.autoConfirmAfterPayment,
+        },
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+const hotelCheckoutOptionsUpdateSchema = z.object({
+  pay_now_enabled: z.boolean().nullable().optional(),
+  payNowEnabled: z.boolean().nullable().optional(),
+  pay_at_hotel_enabled: z.boolean().nullable().optional(),
+  payAtHotelEnabled: z.boolean().nullable().optional(),
+  payment_window_hours: z.number().int().min(1).max(168).nullable().optional(),
+  paymentWindowHours: z.number().int().min(1).max(168).nullable().optional(),
+  reminder_offsets_pct: z.array(z.number().int().min(1).max(99)).nullable().optional(),
+  reminderOffsetsPct: z.array(z.number().int().min(1).max(99)).nullable().optional(),
+  auto_confirm_after_payment: z.boolean().nullable().optional(),
+  autoConfirmAfterPayment: z.boolean().nullable().optional(),
+});
+
+adminRouter.put(
+  '/hotels/:id/checkout-options',
+  requireRole('admin'),
+  validate({ body: hotelCheckoutOptionsUpdateSchema }),
+  async (req, res, next) => {
+    try {
+      const payNowEnabled = req.body.payNowEnabled !== undefined ? req.body.payNowEnabled : req.body.pay_now_enabled;
+      const payAtHotelEnabled = req.body.payAtHotelEnabled !== undefined ? req.body.payAtHotelEnabled : req.body.pay_at_hotel_enabled;
+      const paymentWindowHours = req.body.paymentWindowHours !== undefined ? req.body.paymentWindowHours : req.body.payment_window_hours;
+      const reminderOffsetsPct = req.body.reminderOffsetsPct !== undefined ? req.body.reminderOffsetsPct : req.body.reminder_offsets_pct;
+      const autoConfirmAfterPayment = req.body.autoConfirmAfterPayment !== undefined ? req.body.autoConfirmAfterPayment : req.body.auto_confirm_after_payment;
+
+      const result = await settingsService.updateHotelCheckoutOptions(
+        req.params.id as string,
+        {
+          payNowEnabled,
+          payAtHotelEnabled,
+          paymentWindowHours,
+          reminderOffsetsPct,
+          autoConfirmAfterPayment,
+        },
+        { id: req.user!.id, type: req.user!.role }
+      );
+
+      res.json({
+        data: {
+          overrides: {
+            ...result.overrides,
+            pay_now_enabled: result.overrides.payNowEnabled,
+            pay_at_hotel_enabled: result.overrides.payAtHotelEnabled,
+            payment_window_hours: result.overrides.paymentWindowHours,
+            reminder_offsets_pct: result.overrides.reminderOffsetsPct,
+            auto_confirm_after_payment: result.overrides.autoConfirmAfterPayment,
+          },
+          effective: {
+            ...result.effective,
+            pay_now_enabled: result.effective.payNowEnabled,
+            pay_at_hotel_enabled: result.effective.payAtHotelEnabled,
+            card_payments_enabled: result.effective.cardPaymentsEnabled,
+            payment_window_hours: result.effective.paymentWindowHours,
+            reminder_offsets_pct: result.effective.reminderOffsetsPct,
+            auto_confirm_after_payment: result.effective.autoConfirmAfterPayment,
+          },
+        },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+adminRouter.get('/refunds', requireRole('agent'), async (req, res, next) => {
+  try {
+    const q = req.query as Record<string, string | undefined>;
+    const data = await adminRefundService.list({
+      status: q.status,
+      hotelId: q.hotelId || q.hotel_id,
+      paymentMethod: q.paymentMethod || q.payment_method,
+      from: q.from,
+      to: q.to,
+      page: q.page ? parseInt(q.page, 10) : undefined,
+      limit: q.limit ? parseInt(q.limit, 10) : undefined,
+    });
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+adminRouter.get('/refunds/:id', requireRole('agent'), async (req, res, next) => {
+  try {
+    const id = req.params.id as string;
+    const data = await adminRefundService.getDetail(id);
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+adminRouter.post(
+  '/refunds/:id/request-info',
+  requireRole('agent'),
+  validate({
+    body: z.object({
+      message: z.string().min(1).max(2000),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const id = req.params.id as string;
+      const data = await adminRefundService.requestInfo(id, refundActor(req.user!), req.body.message);
+      res.json({ data });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+adminRouter.post(
+  '/refunds/:id/approve',
+  requireRole('admin'),
+  validate({
+    body: z.object({
+      approved_amount: z.number().positive(),
+      approved_currency: z.string().min(3).max(4),
+      note: z.string().max(1000).optional(),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const id = req.params.id as string;
+      const data = await adminRefundService.approve(id, refundActor(req.user!), req.body);
+      res.json({ data });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+adminRouter.post(
+  '/refunds/:id/reject',
+  requireRole('admin'),
+  validate({
+    body: z.object({
+      reason: z.string().min(1).max(2000),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const id = req.params.id as string;
+      const data = await adminRefundService.reject(id, refundActor(req.user!), req.body.reason);
+      res.json({ data });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+adminRouter.post(
+  '/refunds/:id/complete',
+  requireRole('admin'),
+  (req, res, next) => {
+    refundUploadMiddleware(req, res, (err) => {
+      if (err) next(err);
+      else next();
+    });
+  },
+  async (req, res, next) => {
+    try {
+      const id = req.params.id as string;
+      const reference =
+        typeof req.body?.refund_reference === 'string' ? req.body.refund_reference : '';
+      const files = (req.files as Express.Multer.File[]) || [];
+      const proofFile = files[0];
+      const data = await adminRefundService.complete(id, refundActor(req.user!), {
+        refund_reference: reference,
+        proofFile,
+      });
+      res.json({ data });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+adminRouter.get('/settings/audit', requireRole('admin'), async (req, res, next) => {
+  try {
+    const { settingType, setting_type, targetId, target_id, limit } = req.query as any;
+    const audit = await settingsService.getSettingsAudit({
+      settingType: settingType || setting_type,
+      targetId: targetId || target_id,
+      limit: limit ? parseInt(limit, 10) : undefined,
+    });
+    res.json({ data: audit });
   } catch (err) {
     next(err);
   }

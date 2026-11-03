@@ -1,8 +1,6 @@
 import https from 'node:https';
 import tls from 'node:tls';
 
-// BCV intermediate certificate bundle (or standard chain extension)
-// BCV uses an intermediate CA not included in all default trust stores.
 export const BCV_INTERMEDIATE_CERT = `-----BEGIN CERTIFICATE-----
 MIIEkjCCA3qgAwIBAgIQCgFBQgAAAVOFc2oLheynCDANBgkqhkiG9w0BAQsFADA/
 MSQwIgYDVQQKExtEaWdpQ2VydCwgSW5jLiAtIHd3dy5kaWdpY2VydC5jb20xFzAV
@@ -15,7 +13,7 @@ CSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQCp/lH/mNfW4xT4J418Y9e0tXwA+QxZ
 export interface BcvRateResult {
   usd: number;
   eur: number;
-  valueDate: string; // YYYY-MM-DD
+  valueDate: string;
 }
 
 export function parseBcvHtml(html: string): BcvRateResult {
@@ -23,7 +21,6 @@ export function parseBcvHtml(html: string): BcvRateResult {
   let eur: number | null = null;
   let valueDate: string | null = null;
 
-  // 1. Parse USD
   const dolarMatch =
     html.match(/id=["']dolar["'][\s\S]*?<strong>\s*([0-9.,]+)\s*<\/strong>/i) ||
     html.match(/USD[\s\S]*?<strong>\s*([0-9.,]+)\s*<\/strong>/i) ||
@@ -34,7 +31,6 @@ export function parseBcvHtml(html: string): BcvRateResult {
     usd = parseFloat(cleanStr);
   }
 
-  // 2. Parse EUR
   const euroMatch =
     html.match(/id=["']euro["'][\s\S]*?<strong>\s*([0-9.,]+)\s*<\/strong>/i) ||
     html.match(/EUR[\s\S]*?<strong>\s*([0-9.,]+)\s*<\/strong>/i) ||
@@ -45,7 +41,6 @@ export function parseBcvHtml(html: string): BcvRateResult {
     eur = parseFloat(cleanStr);
   }
 
-  // 3. Parse Fecha Valor
   const dateMatch =
     html.match(/class=["'][^"']*date-display-single[^"']*["'][^>]*content=["']([0-9]{4}-[0-9]{2}-[0-9]{2})/i) ||
     html.match(/Fecha\s+Valor:[^<]*?([0-9]{4}-[0-9]{2}-[0-9]{2})/i) ||
@@ -75,10 +70,9 @@ export function parseBcvHtml(html: string): BcvRateResult {
 export async function fetchBcvRates(): Promise<BcvRateResult> {
   const url = 'https://www.bcv.org.ve/';
 
-  // Custom agent with pinned intermediate cert + system roots
   const customAgent = new https.Agent({
     ca: [...tls.rootCertificates, BCV_INTERMEDIATE_CERT],
-    rejectUnauthorized: true, // Keep TLS verification strictly ON
+    rejectUnauthorized: true,
   });
 
   const responseText = await new Promise<string>((resolve, reject) => {

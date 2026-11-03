@@ -245,7 +245,7 @@ describe('End-to-End API Routes Integration', () => {
     expect(res.status).toBe(201);
     expect(res.body.data.code).toMatch(/^VH-\d{4}-\d{6}$/);
     expect(res.body.data.access_token).toBeDefined();
-    expect(res.body.data.status).toBe('requested');
+    expect(res.body.data.status).toBe('awaiting_payment');
 
     const code = res.body.data.code;
     const token = res.body.data.access_token;

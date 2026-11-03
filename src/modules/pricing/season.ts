@@ -2,10 +2,10 @@ import { pickRate } from './pick-rate.js';
 import { PriceFailure, RateInput, SeasonInput } from './types.js';
 
 export interface StayWindow {
-  checkIn: string; // YYYY-MM-DD
-  checkOut: string; // YYYY-MM-DD
+  checkIn: string;
+  checkOut: string;
   nights: number;
-  dates: Date[]; // 00:00:00Z on each night
+  dates: Date[];
   dateStrings: string[];
 }
 
@@ -68,9 +68,8 @@ export function resolveSingleRoomStay(
   mealPlan: string,
   window: StayWindow,
   guests: number,
-  bookingDate: string // YYYY-MM-DD
+  bookingDate: string
 ): SingleRoomPriceResult {
-  // 1. Filter out seasons whose booking window is closed on the booking date
   const activeSeasons = seasons.filter((s) => {
     if (!s.isActive) return false;
     if (s.bookingFrom && bookingDate < s.bookingFrom) return false;
@@ -78,7 +77,6 @@ export function resolveSingleRoomStay(
     return true;
   });
 
-  // 2. Order by priority desc, later dateFrom, then id
   activeSeasons.sort((a, b) => {
     if (b.priority !== a.priority) return b.priority - a.priority;
     if (b.dateFrom !== a.dateFrom) return b.dateFrom.localeCompare(a.dateFrom);
@@ -92,7 +90,6 @@ export function resolveSingleRoomStay(
     const nightDate = window.dates[i];
     const nightStr = window.dateStrings[i];
 
-    // Covering seasons: dateFrom <= nightStr <= dateTo
     const coveringSeasons = activeSeasons.filter(
       (s) => s.dateFrom <= nightStr && nightStr <= s.dateTo
     );
@@ -119,7 +116,7 @@ export function resolveSingleRoomStay(
           seasonId: season.id,
           rate: pick.rate,
         };
-        break; // First covering season with an applicable rate wins
+        break;
       } else if (pick.error === 'min_nights') {
         hadRatesButMinNights = true;
         if (pick.required !== undefined) {
@@ -157,7 +154,6 @@ export function resolveSingleRoomStay(
     };
   }
 
-  // 3. Regroup consecutive nights on the same rate row
   const runs: RateRun[] = [];
   for (const pn of pricedNights) {
     const lastRun = runs[runs.length - 1];

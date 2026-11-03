@@ -1,5 +1,6 @@
 import { prisma } from '../../lib/prisma.js';
 import { redis } from '../../lib/redis.js';
+import { logger } from '../../lib/logger.js';
 import { BcvRateResult } from './sources/bcv.js';
 
 export interface ComposeInput {
@@ -27,10 +28,8 @@ export async function composeAndPersistRates(input: ComposeInput): Promise<Compo
   }
 
   return prisma.$transaction(async (tx) => {
-    // 1. Acquire transaction advisory lock
     await tx.$executeRaw`SELECT pg_advisory_xact_lock(${RATES_ADVISORY_LOCK_ID})`;
 
-    // 2. If fresh BCV was retrieved, upsert into bcv_published_rates
     let bcvUpserted = false;
     if (freshBcv) {
       const vDate = new Date(`${freshBcv.valueDate}T00:00:00Z`);
@@ -51,7 +50,6 @@ export async function composeAndPersistRates(input: ComposeInput): Promise<Compo
       bcvUpserted = true;
     }
 
-    // 3. Find last good auto row to carry forward any missing values
     const lastRow = await tx.exchangeRate.findFirst({
       where: { isManualOverride: false },
       orderBy: { recordedAt: 'desc' },
@@ -61,7 +59,6 @@ export async function composeAndPersistRates(input: ComposeInput): Promise<Compo
       throw new Error('No prior exchange rate available to carry forward missing values.');
     }
 
-    // 4. Determine composed values and sources
     let bcvUsd: number;
     let bcvEur: number;
     let bcvUsdSource: string;
@@ -84,7 +81,7 @@ export async function composeAndPersistRates(input: ComposeInput): Promise<Compo
         ? lastRow!.bcvEurSource
         : `carried:${lastRow!.bcvEurSource}`;
       bcvValueDate = lastRow!.bcvValueDate;
-      console.log(`[RatesCompose] BCV missing, carrying forward: ${bcvUsdSource}, ${bcvEurSource}`);
+      logger.info({ bcvUsdSource, bcvEurSource }, '[RatesCompose] BCV missing, carrying forward');
     }
 
     let binanceUsdt: number;
@@ -98,11 +95,9 @@ export async function composeAndPersistRates(input: ComposeInput): Promise<Compo
       usdtSource = lastRow!.usdtSource.startsWith('carried:')
         ? lastRow!.usdtSource
         : `carried:${lastRow!.usdtSource}`;
-      console.log(`[RatesCompose] USDT missing, carrying forward: ${usdtSource}`);
+      logger.info({ usdtSource }, '[RatesCompose] USDT missing, carrying forward');
     }
 
-    // 5. Check if a new exchange_rates row is needed:
-    // A new exchange_rates row is inserted only if the applicable BCV changed or USDT is fresh
     let shouldInsert = false;
     if (!lastRow) {
       shouldInsert = true;
@@ -138,7 +133,6 @@ export async function composeAndPersistRates(input: ComposeInput): Promise<Compo
       });
       createdId = created.id.toString();
 
-      // Invalidate redis cache and bump catalog
       try {
         await redis.del('exchange:latest');
         await redis.incr('catalog:version');

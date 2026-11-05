@@ -39,6 +39,7 @@ export const hotelCardSchema = z.object({
   price_basis: z.enum(['per_night_from', 'stay_total']),
   availability: z.enum(['ok', 'no_season', 'no_rate', 'min_nights']),
   min_nights_required: z.number().optional(),
+  amenities: z.array(z.string()).optional(),
 });
 
 export const catalogSearchResponseSchema = z.object({
@@ -120,6 +121,7 @@ export const hotelDetailSchema = z.object({
       })
     ),
     meal_plans: z.array(z.string()),
+    amenities: z.array(z.string()).optional(),
   }),
   rooms: z.array(
     z.object({

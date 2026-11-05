@@ -179,6 +179,14 @@ export const bookingPublicViewSchema = z.object({
   ]),
   has_confirmation_document: z.boolean(),
   allowed_actions: z.array(z.enum(['report_payment', 'cancel', 'request_refund'])),
+  refund_eligibility: z
+    .object({
+      eligible: z.boolean(),
+      reason: z.string().optional(),
+      message_key: z.string(),
+    })
+    .optional(),
+  payment_receipt_available: z.boolean().optional(),
   created_at: z.string(),
 });
 

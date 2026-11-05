@@ -19,17 +19,27 @@ function normalizeOrigin(origin: string): string {
   return origin.replace(/\/+$/, '');
 }
 
-const allowedOriginsList = [
-  env.PUBLIC_API_ORIGIN,
-  ...env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()),
+const devLocalOrigins = [
   'http://localhost:5173',
   'http://localhost:5174',
-].map(normalizeOrigin);
+  'http://127.0.0.1:5173',
+  'http://127.0.0.1:5174',
+];
+
+const allowedOriginsList = [
+  env.PUBLIC_API_ORIGIN,
+  ...env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean),
+  ...(env.NODE_ENV === 'development' ? devLocalOrigins : []),
+]
+  .map(normalizeOrigin)
+  .filter(Boolean);
+
+const allowedOriginSet = new Set(allowedOriginsList);
 
 export const corsMiddleware = cors({
   origin: (origin, callback) => {
     if (!origin) return callback(null, true);
-    if (allowedOriginsList.includes(normalizeOrigin(origin))) {
+    if (allowedOriginSet.has(normalizeOrigin(origin))) {
       return callback(null, true);
     }
     return callback(null, false);
@@ -47,6 +57,7 @@ export const corsMiddleware = cors({
     'X-Client-User-Agent',
     'X-Flow-Id',
     'If-None-Match',
+    'Idempotency-Key',
   ],
   exposedHeaders: ['Retry-After', 'ETag'],
 });

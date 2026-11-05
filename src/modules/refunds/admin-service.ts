@@ -22,6 +22,9 @@ import {
 } from '../files/upload-validation.js';
 import { derivePaymentStatus } from '../../lib/payment-status.js';
 import { refundNotifier } from '../notifications/refund-notifier.js';
+import { settingsService } from '../settings/service.js';
+import { bookingService } from '../bookings/service.js';
+import { SYSTEM_CARD_PREFIX, SYSTEM_CONFIRMATION_PREFIX } from './refund-submit.js';
 
 const OPEN_STATUSES: RefundRequestStatus[] = [
   RefundRequestStatus.submitted,
@@ -60,6 +63,9 @@ export class AdminRefundService {
       }
     }
 
+    const slaSettings = await settingsService.getGlobalCheckoutSettings();
+    const slaHours = slaSettings.refundReviewSlaHours ?? 48;
+
     const [items, total, counts] = await Promise.all([
       prisma.refundRequest.findMany({
         where,
@@ -90,10 +96,19 @@ export class AdminRefundService {
     let mapped = items.map((rr) => {
       const b = rr.booking;
       const pay = b.payments[0];
+      const ageHours = (Date.now() - rr.createdAt.getTime()) / (3600 * 1000);
       return {
         id: rr.id,
         status: rr.status,
+        reference: rr.publicReference,
         created_at: rr.createdAt.toISOString(),
+        age_hours: Math.round(ageHours * 10) / 10,
+        sla_overdue:
+          rr.status === RefundRequestStatus.submitted ||
+          rr.status === RefundRequestStatus.in_review ||
+          rr.status === RefundRequestStatus.needs_info
+            ? ageHours > slaHours
+            : false,
         booking_code: b.code,
         booking_status: b.status,
         payment_status: derivePaymentStatus({ status: b.status, paymentMode: b.paymentMode }),
@@ -108,7 +123,14 @@ export class AdminRefundService {
       mapped = mapped.filter((m) => m.payment_method === filters.paymentMethod);
     }
 
-    return { items: mapped, total, page, limit: take, status_counts: statusCounts };
+    return {
+      items: mapped,
+      total,
+      page,
+      limit: take,
+      status_counts: statusCounts,
+      refund_review_sla_hours: slaHours,
+    };
   }
 
   getAllowedActions(status: RefundRequestStatus): string[] {
@@ -125,7 +147,37 @@ export class AdminRefundService {
     }
   }
 
-  async getDetail(id: string) {
+  async startReview(id: string, actor: { id: string; role: Role }) {
+    this.assertRole(actor.role, 'agent');
+    const rr = await prisma.refundRequest.findUnique({ where: { id } });
+    if (!rr) throw new NotFoundError('Refund request not found');
+    if (rr.status !== RefundRequestStatus.submitted) {
+      return rr;
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.refundRequest.update({
+        where: { id },
+        data: { status: RefundRequestStatus.in_review },
+      });
+      await tx.refundEvent.create({
+        data: {
+          refundRequestId: id,
+          fromStatus: RefundRequestStatus.submitted,
+          toStatus: RefundRequestStatus.in_review,
+          actorType: actor.role,
+          actorId: actor.id,
+          note: 'Review started',
+        },
+      });
+    });
+    return prisma.refundRequest.findUnique({ where: { id } });
+  }
+
+  async getDetail(id: string, actor?: { id: string; role: Role }) {
+    if (actor) {
+      await this.startReview(id, actor).catch(() => undefined);
+    }
+
     const rr = await prisma.refundRequest.findUnique({
       where: { id },
       include: {
@@ -143,9 +195,11 @@ export class AdminRefundService {
     if (!rr) throw new NotFoundError('Refund request not found');
 
     const destination = decryptRefundPayload<Record<string, unknown>>(rr.destinationDetailsEnc);
+    const fraudSignals = await this.computeFraudSignals(rr);
 
     return {
       id: rr.id,
+      reference: rr.publicReference,
       status: rr.status,
       reason_code: rr.reasonCode,
       reason_text: rr.reasonText,
@@ -164,13 +218,16 @@ export class AdminRefundService {
         actor_type: e.actorType,
         note: e.note,
       })),
+      fraud_signals: fraudSignals,
       documents: rr.documents.map((d) => ({
         id: d.id,
         kind: d.kind,
+        source: d.source,
         original_name: d.originalName,
         mime_type: d.mimeType,
         size_bytes: d.sizeBytes,
         uploaded_by: d.uploadedBy,
+        content_hash: d.contentHash,
       })),
       booking: {
         code: rr.booking.code,
@@ -195,10 +252,67 @@ export class AdminRefundService {
   async downloadDocument(refundId: string, documentId: string) {
     const doc = await prisma.refundDocument.findFirst({
       where: { id: documentId, refundRequestId: refundId },
+      include: { refundRequest: { include: { booking: true } } },
     });
     if (!doc) throw new NotFoundError('Document not found');
+
+    if (doc.storageKey.startsWith(SYSTEM_CONFIRMATION_PREFIX)) {
+      const code = doc.refundRequest.booking.code;
+      const { buffer, filename } = await bookingService.streamConfirmationPdf(code);
+      return {
+        data: buffer,
+        doc: { ...doc, mimeType: 'application/pdf', originalName: filename },
+      };
+    }
+    if (doc.storageKey.startsWith(SYSTEM_CARD_PREFIX)) {
+      const payId = doc.linkedPaymentId || doc.storageKey.slice(SYSTEM_CARD_PREFIX.length);
+      const pay = await prisma.payment.findUnique({ where: { id: payId } });
+      const payload = Buffer.from(JSON.stringify(pay, null, 2), 'utf8');
+      return {
+        data: payload,
+        doc: { ...doc, mimeType: 'application/json', originalName: 'card-payment-record.json' },
+      };
+    }
+
     const data = await getPrivateFileStorage().read(doc.storageKey);
     return { data, doc };
+  }
+
+  private async computeFraudSignals(rr: {
+    id: string;
+    refundReference: string | null;
+    destinationDetailsEnc: string;
+    documents: { contentHash: string | null; kind: string; linkedPaymentId: string | null }[];
+    booking: { id: string; payments: { id: string; proofContentHash: string | null }[] };
+  }) {
+    const warnings: string[] = [];
+    for (const doc of rr.documents) {
+      if (!doc.contentHash) continue;
+      const dup = await prisma.refundDocument.findFirst({
+        where: {
+          contentHash: doc.contentHash,
+          refundRequestId: { not: rr.id },
+        },
+        select: { id: true },
+      });
+      if (dup) warnings.push('duplicate_file_hash_across_requests');
+
+      if (doc.kind === 'payment_proof' && doc.linkedPaymentId) {
+        const pay = rr.booking.payments.find((p) => p.id === doc.linkedPaymentId);
+        if (pay?.proofContentHash && pay.proofContentHash !== doc.contentHash) {
+          warnings.push('payment_proof_hash_mismatch');
+        }
+      }
+    }
+
+    if (rr.refundReference) {
+      const dupRef = await prisma.refundRequest.findFirst({
+        where: { refundReference: rr.refundReference, id: { not: rr.id } },
+      });
+      if (dupRef) warnings.push('duplicate_refund_reference');
+    }
+
+    return [...new Set(warnings)];
   }
 
   private assertRole(role: Role | string, min: 'agent' | 'admin') {

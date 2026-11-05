@@ -32,6 +32,8 @@ const searchHotelsQuerySchema = z.object({
   max_price: z.coerce.number().optional(),
   category: z.string().optional(),
   q: z.string().optional(),
+  amenities: z.string().optional(),
+  pets_allowed: z.enum(['true', 'false', '1', '0']).optional(),
   sort: z.enum(['price_asc', 'price_desc', 'stars_desc']).optional(),
   cursor: z.string().optional(),
   limit: z.coerce.number().optional(),

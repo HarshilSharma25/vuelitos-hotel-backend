@@ -314,6 +314,12 @@ export async function setupRepeatableJobs() {
       { name: 'bookings.payment-reminders' }
     );
 
+    await schedulerQueue.upsertJobScheduler(
+      'refund-staged-uploads-cleanup',
+      { pattern: '0 * * * *' },
+      { name: 'refunds.purge-staged-uploads' }
+    );
+
     logger.info('[Scheduler] Registered BullMQ repeatable jobs.');
   } catch (err: any) {
     logger.warn({ err: err.message }, '[Scheduler] Could not register repeatable jobs (e.g. redis offline)');

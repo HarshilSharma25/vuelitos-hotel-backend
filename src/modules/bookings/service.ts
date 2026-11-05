@@ -607,10 +607,16 @@ export class BookingService {
       submitted_at: p.submittedAt.toISOString(),
     }));
 
-    const openRefund = await refundService.getOpenRefundForBooking(booking.id);
     const latestRefund = await prisma.refundRequest.findFirst({
       where: { bookingId: booking.id },
       orderBy: { createdAt: 'desc' },
+    });
+
+    const refundEligibility = await refundService.computeEligibilityForBooking({
+      id: booking.id,
+      status: booking.status,
+      paymentMode: booking.paymentMode,
+      payments: booking.payments,
     });
 
     const hotelId = booking.items[0]?.hotelId;
@@ -618,8 +624,7 @@ export class BookingService {
 
     let allowedActions = refundService.filterAllowedActions(
       getAllowedActions(booking.status, booking.paymentMode as any, booking.items[0]?.checkIn),
-      booking.status,
-      Boolean(openRefund)
+      refundEligibility
     );
 
     return {
@@ -649,6 +654,8 @@ export class BookingService {
       timeline,
       guest_details: (booking as any).guestDetails ? ((booking as any).guestDetails as any) : undefined,
       allowed_actions: allowedActions,
+      refund_eligibility: refundEligibility,
+      payment_receipt_available: booking.payments.some((p) => Boolean(p.proofStorageKey)),
       created_at: booking.createdAt.toISOString(),
     };
   }
@@ -880,11 +887,15 @@ export class BookingService {
         const item = b.items[0];
         const hotel = item ? hotelMap.get(item.hotelId) : undefined;
         const snap = item?.priceSnapshot as any;
-        const openRefund = await refundService.getOpenRefundForBooking(b.id);
+        const refundEligibility = await refundService.computeEligibilityForBooking({
+          id: b.id,
+          status: b.status,
+          paymentMode: b.paymentMode,
+          payments: b.payments,
+        });
         let allowedActions = refundService.filterAllowedActions(
           getAllowedActions(b.status, b.paymentMode as any, item?.checkIn),
-          b.status,
-          Boolean(openRefund)
+          refundEligibility
         );
         const totals = (b.totalsByMethod as any[]) || [];
         const primaryTotal = totals[0];

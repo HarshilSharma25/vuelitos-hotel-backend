@@ -45,6 +45,8 @@ const layeredEnvFiles = [
 for (const envFileName of layeredEnvFiles) {
   applyEnvFile(envFileName, true);
 }
+// Local overrides (DATABASE_URL, etc.) — not used by Prisma CLI; see npm run prisma:migrate:local
+applyEnvFile('.env.local', false);
 if (process.env.ENV_FILE) {
   applyEnvFile(process.env.ENV_FILE, false);
 }

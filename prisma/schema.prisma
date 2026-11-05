@@ -127,9 +127,17 @@ enum RefundReasonCode {
 
 enum RefundDocumentKind {
   payment_proof
+  booking_confirmation
   id_document
   other
   completion_proof
+}
+
+enum RefundDocumentSource {
+  uploaded
+  reused_receipt
+  card_record
+  system_confirmation
 }
 
 enum RefundDocumentUploadedBy {
@@ -150,8 +158,10 @@ model Hotel {
   defaultCommissionPercent Decimal              @default(10.00) @map("default_commission_percent") @db.Decimal(5, 2)
   availabilityMode        AvailabilityMode      @default(manual) @map("availability_mode")
   isActive                Boolean               @default(true) @map("is_active")
+  petsAllowed             Boolean               @default(false) @map("pets_allowed")
   childBandsEnabled       Boolean               @default(false) @map("child_bands_enabled")
   description             String?
+  amenities               Json                  @default("[]")
   coverImageKey           String?               @map("cover_image_key")
   coverImageUrl           String?               @map("cover_image_url")
   payNowEnabled           Boolean?              @map("pay_now_enabled")
@@ -289,6 +299,7 @@ model Booking {
   payments          Payment[]
   checks            AvailabilityCheck[]
   refundRequests    RefundRequest[]
+  refundStagedUploads RefundStagedUpload[]
 
   @@index([userId])
   @@map("bookings")
@@ -299,6 +310,7 @@ model RefundRequest {
   bookingId               String               @map("booking_id")
   booking                 Booking              @relation(fields: [bookingId], references: [id], onDelete: Restrict)
   status                  RefundRequestStatus  @default(submitted)
+  publicReference         String?              @unique @map("public_reference")
   reasonCode              RefundReasonCode     @map("reason_code")
   reasonText              String?              @map("reason_text") @db.VarChar(1000)
   requestedBy             String               @map("requested_by")
@@ -324,7 +336,10 @@ model RefundDocument {
   refundRequestId String                   @map("refund_request_id")
   refundRequest   RefundRequest            @relation(fields: [refundRequestId], references: [id], onDelete: Cascade)
   kind            RefundDocumentKind
+  source          RefundDocumentSource     @default(uploaded)
   storageKey      String                   @map("storage_key")
+  linkedPaymentId String?                  @map("linked_payment_id")
+  contentHash     String?                  @map("content_hash")
   originalName    String                   @map("original_name")
   mimeType        String                   @map("mime_type")
   sizeBytes       Int                      @map("size_bytes")
@@ -332,7 +347,40 @@ model RefundDocument {
   createdAt       DateTime                 @default(now()) @map("created_at")
 
   @@index([refundRequestId])
+  @@index([contentHash])
   @@map("refund_documents")
+}
+
+model RefundStagedUpload {
+  id           String    @id @default(uuid())
+  bookingId    String    @map("booking_id")
+  booking      Booking   @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+  uploaderKey  String    @map("uploader_key")
+  storageKey   String    @map("storage_key")
+  contentHash  String    @map("content_hash")
+  originalName String    @map("original_name")
+  mimeType     String    @map("mime_type")
+  sizeBytes    Int       @map("size_bytes")
+  expiresAt    DateTime  @map("expires_at")
+  consumedAt   DateTime? @map("consumed_at")
+  createdAt    DateTime  @default(now()) @map("created_at")
+
+  @@index([bookingId, uploaderKey])
+  @@index([expiresAt])
+  @@map("refund_staged_uploads")
+}
+
+model RefundIdempotencyKey {
+  id           String   @id @default(uuid())
+  bookingId    String   @map("booking_id")
+  key          String
+  responseJson Json     @map("response_json")
+  createdAt    DateTime @default(now()) @map("created_at")
+  expiresAt    DateTime @map("expires_at")
+
+  @@unique([bookingId, key])
+  @@index([expiresAt])
+  @@map("refund_idempotency_keys")
 }
 
 model RefundEvent {
@@ -397,6 +445,10 @@ model Payment {
   externalProvider   String?       @map("external_provider")
   externalSessionId  String?       @unique @map("external_session_id")
   rawStatus          String?       @map("raw_status")
+  proofStorageKey    String?       @map("proof_storage_key")
+  proofContentHash   String?       @map("proof_content_hash")
+  proofMimeType      String?       @map("proof_mime_type")
+  proofOriginalName  String?       @map("proof_original_name")
 
   @@map("payments")
 }
@@ -505,6 +557,7 @@ model CheckoutSettings {
   paymentWindowHours      Int      @default(48) @map("payment_window_hours")
   reminderOffsetsPct      Int[]    @default([50, 90]) @map("reminder_offsets_pct")
   autoConfirmAfterPayment Boolean  @default(false) @map("auto_confirm_after_payment")
+  refundReviewSlaHours    Int      @default(48) @map("refund_review_sla_hours")
   createdAt               DateTime @default(now()) @map("created_at")
   updatedAt               DateTime @updatedAt @map("updated_at")
 

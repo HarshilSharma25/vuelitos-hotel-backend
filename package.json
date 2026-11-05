@@ -18,6 +18,8 @@
     "test:watch": "vitest",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
+    "prisma:migrate:local": "DATABASE_URL=postgresql://${USER}@localhost:5432/hotel_backend?schema=public prisma migrate dev",
+    "prisma:push:local": "DATABASE_URL=postgresql://${USER}@localhost:5432/hotel_backend?schema=public prisma db push",
     "prisma:deploy": "prisma migrate deploy",
     "seed": "tsx prisma/seed.ts",
     "pm2:start": "pm2 start ecosystem.config.cjs --only HotelBackend-Prod,HotelBackend-Worker-Prod --env production",

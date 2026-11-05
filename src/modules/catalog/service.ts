@@ -18,6 +18,13 @@ import {
   InvalidStayWindowError,
   NotFoundError,
 } from '../../lib/errors.js';
+import {
+  hotelAcceptsPets,
+  hotelMatchesRequiredAmenities,
+  isPetsAllowedFilter,
+  parseAmenityFilterTags,
+  parseHotelAmenities,
+} from '../../shared/hotelAmenities.js';
 
 export interface CatalogSearchParams {
   destination?: string;
@@ -30,6 +37,8 @@ export interface CatalogSearchParams {
   max_price?: number;
   category?: string;
   q?: string;
+  amenities?: string;
+  pets_allowed?: string | boolean;
   sort?: 'price_asc' | 'price_desc' | 'stars_desc';
   cursor?: string;
   limit?: number;
@@ -174,10 +183,25 @@ export class CatalogService {
       },
     });
 
+    const requiredAmenityTags = parseAmenityFilterTags(params.amenities);
+    const petsRequired = isPetsAllowedFilter(params.pets_allowed);
+
     const items: any[] = [];
 
     for (const h of hotels) {
       if (h.rooms.length === 0) continue;
+
+      if (petsRequired && !hotelAcceptsPets(h)) {
+        continue;
+      }
+      if (
+        !hotelMatchesRequiredAmenities(h.amenities, requiredAmenityTags)
+      ) {
+        continue;
+      }
+
+      const hotelAmenities = parseHotelAmenities(h.amenities);
+      const petsAllowed = hotelAcceptsPets(h);
 
       const maxOcc = Math.max(...h.rooms.map((r) => r.maxOccupancy), 1);
       const roomsQuoted = effectiveRooms(rooms, totalGuests, maxOcc);
@@ -312,6 +336,9 @@ export class CatalogService {
           price_basis: 'stay_total',
           availability: bestAvailability,
           min_nights_required: bestAvailability === 'min_nights' ? minNightsReq : undefined,
+          amenities: hotelAmenities,
+          pets_allowed: petsAllowed,
+          petsAllowed,
         });
       } else {
         const undatedRes = calculateUndatedDesde(
@@ -351,6 +378,9 @@ export class CatalogService {
           price: undatedRes.price,
           price_basis: 'per_night_from',
           availability: undatedRes.availability,
+          amenities: hotelAmenities,
+          pets_allowed: petsAllowed,
+          petsAllowed,
         });
       }
     }
@@ -664,6 +694,8 @@ export class CatalogService {
       }
     }
 
+    const acceptsPets = hotelAcceptsPets(hotel);
+
     return {
       hotel: {
         slug: hotel.slug,
@@ -690,6 +722,9 @@ export class CatalogService {
           sortOrder: img.sortOrder,
         })),
         meal_plans: mealPlans,
+        amenities: parseHotelAmenities(hotel.amenities),
+        pets_allowed: acceptsPets,
+        petsAllowed: acceptsPets,
       },
       rooms: hotel.rooms.map((r) => ({
         id: r.id,

@@ -28,7 +28,9 @@ import { recordBookingTransition } from '../../lib/metrics.js';
 import { BookingStatus, Role } from '@prisma/client';
 import { adminRefundService } from '../refunds/admin-service.js';
 import { refundUploadMiddleware } from '../../middleware/refund-upload.js';
+import { parseHotelAmenities } from '../../shared/hotelAmenities.js';
 import { notifyBookingStatusChange } from '../notifications/booking-events.js';
+import { getPrivateFileStorage } from '../files/private-storage.js';
 
 function refundActor(user: { id: string; role: string }) {
   return { id: user.id, role: user.role as Role };
@@ -246,6 +248,34 @@ adminRouter.get('/bookings', requireRole('agent'), async (req, res, next) => {
     next(err);
   }
 });
+
+adminRouter.get(
+  '/bookings/:code/payments/:paymentId/proof',
+  requireRole('agent'),
+  async (req, res, next) => {
+    try {
+      const code = req.params.code as string;
+      const paymentId = req.params.paymentId as string;
+      const payment = await prisma.payment.findFirst({
+        where: { id: paymentId, booking: { code } },
+      });
+      if (!payment?.proofStorageKey) {
+        throw new NotFoundError('Payment proof not found');
+      }
+      const data = await getPrivateFileStorage().read(payment.proofStorageKey);
+      const mime = payment.proofMimeType || 'application/octet-stream';
+      const safeName = (payment.proofOriginalName || 'payment-proof')
+        .replace(/[^\w.\-()+ ]+/g, '_')
+        .slice(0, 180);
+      res.setHeader('Content-Type', mime);
+      res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.send(data);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 adminRouter.get('/bookings/:code', requireRole('agent'), async (req, res, next) => {
   try {
@@ -731,8 +761,17 @@ function normalizeHotelInput(body: any) {
     data.isActive = typeof raw === 'string' ? raw === 'true' : Boolean(raw);
   }
 
+  if (body.petsAllowed !== undefined || body.pets_allowed !== undefined) {
+    const raw = body.petsAllowed !== undefined ? body.petsAllowed : body.pets_allowed;
+    data.petsAllowed = typeof raw === 'string' ? raw === 'true' : Boolean(raw);
+  }
+
   if (body.description !== undefined) {
     data.description = body.description || null;
+  }
+
+  if (body.amenities !== undefined) {
+    data.amenities = parseHotelAmenities(body.amenities);
   }
 
   if (body.coverImageKey !== undefined || body.cover_image_key !== undefined) {
@@ -804,6 +843,9 @@ function formatHotelResponse(hotel: any) {
     availability_mode: hotel.availabilityMode,
     isActive: Boolean(hotel.isActive),
     is_active: Boolean(hotel.isActive),
+    petsAllowed: Boolean(hotel.petsAllowed),
+    pets_allowed: Boolean(hotel.petsAllowed),
+    amenities: parseHotelAmenities(hotel.amenities),
   };
 }
 
@@ -841,7 +883,10 @@ const hotelCreateSchema = z.object({
   availabilityMode: z.enum(['manual', 'api']).optional(),
   is_active: z.boolean().optional(),
   isActive: z.boolean().optional(),
+  pets_allowed: z.boolean().optional(),
+  petsAllowed: z.boolean().optional(),
   description: z.string().optional().nullable(),
+  amenities: z.array(z.string()).optional(),
   cover_image_key: z.string().optional().nullable(),
   coverImageKey: z.string().optional().nullable(),
   cover_image_url: z.string().optional().nullable(),
@@ -870,7 +915,9 @@ adminRouter.post(
           defaultCommissionPercent: data.defaultCommissionPercent ?? 10.0,
           availabilityMode: data.availabilityMode ?? 'manual',
           isActive: data.isActive ?? true,
+          petsAllowed: data.petsAllowed ?? false,
           description: data.description ?? null,
+          amenities: data.amenities ?? [],
           coverImageKey: data.coverImageKey ?? null,
           coverImageUrl: data.coverImageUrl ?? null,
         },
@@ -1604,6 +1651,8 @@ const checkoutSettingsUpdateSchema = z.object({
   reminderOffsetsPct: z.array(z.number().int().min(1).max(99)).optional(),
   auto_confirm_after_payment: z.boolean().optional(),
   autoConfirmAfterPayment: z.boolean().optional(),
+  refund_review_sla_hours: z.number().int().min(1).max(336).optional(),
+  refundReviewSlaHours: z.number().int().min(1).max(336).optional(),
 });
 
 function formatCheckoutSettingsResponse(settings: any) {
@@ -1615,6 +1664,8 @@ function formatCheckoutSettingsResponse(settings: any) {
     payment_window_hours: settings.paymentWindowHours,
     reminder_offsets_pct: settings.reminderOffsetsPct,
     auto_confirm_after_payment: settings.autoConfirmAfterPayment,
+    refund_review_sla_hours: settings.refundReviewSlaHours,
+    refundReviewSlaHours: settings.refundReviewSlaHours,
   };
 }
 
@@ -1639,6 +1690,8 @@ adminRouter.put(
       const paymentWindowHours = req.body.paymentWindowHours ?? req.body.payment_window_hours;
       const reminderOffsetsPct = req.body.reminderOffsetsPct ?? req.body.reminder_offsets_pct;
       const autoConfirmAfterPayment = req.body.autoConfirmAfterPayment ?? req.body.auto_confirm_after_payment;
+      const refundReviewSlaHours =
+        req.body.refundReviewSlaHours ?? req.body.refund_review_sla_hours;
 
       const updated = await settingsService.updateGlobalCheckoutSettings(
         {
@@ -1648,6 +1701,7 @@ adminRouter.put(
           paymentWindowHours,
           reminderOffsetsPct,
           autoConfirmAfterPayment,
+          refundReviewSlaHours,
         },
         { id: req.user!.id, type: req.user!.role }
       );
@@ -1773,7 +1827,36 @@ adminRouter.get('/refunds', requireRole('agent'), async (req, res, next) => {
 adminRouter.get('/refunds/:id', requireRole('agent'), async (req, res, next) => {
   try {
     const id = req.params.id as string;
-    const data = await adminRefundService.getDetail(id);
+    const data = await adminRefundService.getDetail(id, refundActor(req.user!));
+    res.json({ data });
+  } catch (err) {
+    next(err);
+  }
+});
+
+adminRouter.get(
+  '/refunds/:id/documents/:documentId',
+  requireRole('agent'),
+  async (req, res, next) => {
+    try {
+      const id = req.params.id as string;
+      const documentId = req.params.documentId as string;
+      const { data, doc } = await adminRefundService.downloadDocument(id, documentId);
+      const safeName = doc.originalName.replace(/[^\w.\-()+ ]+/g, '_').slice(0, 180);
+      res.setHeader('Content-Type', doc.mimeType);
+      res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+      res.send(data);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+adminRouter.post('/refunds/:id/start-review', requireRole('agent'), async (req, res, next) => {
+  try {
+    const id = req.params.id as string;
+    const data = await adminRefundService.startReview(id, refundActor(req.user!));
     res.json({ data });
   } catch (err) {
     next(err);

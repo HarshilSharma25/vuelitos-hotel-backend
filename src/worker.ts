@@ -43,6 +43,13 @@ const worker = new Worker(
       case 'rates.bcv':
         await processRatesBcvJob();
         break;
+      case 'refunds.purge-staged-uploads': {
+        const { purgeExpiredStagedUploads } = await import(
+          './modules/refunds/staged-upload-service.js'
+        );
+        await purgeExpiredStagedUploads();
+        break;
+      }
       case 'tarifario.import':
         if (job.data?.isCommit) {
           await tarifarioService.commit(job.data.planId, job.data.expectedHash);

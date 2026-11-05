@@ -12,6 +12,7 @@ export interface EffectiveCheckoutSettings {
   paymentWindowHours: number;
   reminderOffsetsPct: number[];
   autoConfirmAfterPayment: boolean;
+  refundReviewSlaHours: number;
 }
 
 export interface HotelCheckoutOverrides {
@@ -42,6 +43,7 @@ export class SettingsService {
           paymentWindowHours: 48,
           reminderOffsetsPct: [50, 90],
           autoConfirmAfterPayment: false,
+          refundReviewSlaHours: 48,
         },
       });
     }
@@ -77,6 +79,7 @@ export class SettingsService {
         paymentWindowHours: global.paymentWindowHours,
         reminderOffsetsPct: global.reminderOffsetsPct,
         autoConfirmAfterPayment: global.autoConfirmAfterPayment,
+        refundReviewSlaHours: global.refundReviewSlaHours ?? 48,
       };
     } else {
       const hotel = await prisma.hotel.findUnique({
@@ -98,6 +101,7 @@ export class SettingsService {
           paymentWindowHours: global.paymentWindowHours,
           reminderOffsetsPct: global.reminderOffsetsPct,
           autoConfirmAfterPayment: global.autoConfirmAfterPayment,
+          refundReviewSlaHours: global.refundReviewSlaHours ?? 48,
         };
       } else {
         const payNowEnabled =
@@ -132,6 +136,7 @@ export class SettingsService {
           paymentWindowHours,
           reminderOffsetsPct,
           autoConfirmAfterPayment,
+          refundReviewSlaHours: global.refundReviewSlaHours ?? 48,
         };
       }
     }
@@ -155,6 +160,7 @@ export class SettingsService {
       paymentWindowHours?: number;
       reminderOffsetsPct?: number[];
       autoConfirmAfterPayment?: boolean;
+      refundReviewSlaHours?: number;
     },
     actor: { id: string; type: string }
   ): Promise<CheckoutSettings> {
@@ -182,6 +188,12 @@ export class SettingsService {
       }
     }
 
+    if (data.refundReviewSlaHours !== undefined) {
+      if (data.refundReviewSlaHours < 1 || data.refundReviewSlaHours > 336) {
+        throw new BadRequestError('Refund review SLA must be between 1 and 336 hours');
+      }
+    }
+
     const updated = await prisma.checkoutSettings.update({
       where: { id: 'global' },
       data: {
@@ -198,6 +210,10 @@ export class SettingsService {
           data.autoConfirmAfterPayment !== undefined
             ? data.autoConfirmAfterPayment
             : current.autoConfirmAfterPayment,
+        refundReviewSlaHours:
+          data.refundReviewSlaHours !== undefined
+            ? data.refundReviewSlaHours
+            : current.refundReviewSlaHours,
       },
     });
 
@@ -212,6 +228,7 @@ export class SettingsService {
           paymentWindowHours: current.paymentWindowHours,
           reminderOffsetsPct: current.reminderOffsetsPct,
           autoConfirmAfterPayment: current.autoConfirmAfterPayment,
+          refundReviewSlaHours: current.refundReviewSlaHours,
         },
         newValue: {
           payNowEnabled: updated.payNowEnabled,
@@ -219,6 +236,7 @@ export class SettingsService {
           cardPaymentsEnabled: updated.cardPaymentsEnabled,
           paymentWindowHours: updated.paymentWindowHours,
           reminderOffsetsPct: updated.reminderOffsetsPct,
+          refundReviewSlaHours: updated.refundReviewSlaHours,
           autoConfirmAfterPayment: updated.autoConfirmAfterPayment,
         },
         actorId: actor.id,

@@ -14,13 +14,6 @@ import {
   NotFoundError,
 } from '../../lib/errors.js';
 import { verifyAccessToken } from '../../lib/ids.js';
-import {
-  decryptRefundPayload,
-  encryptRefundPayload,
-  maskDestinationForList,
-} from '../../lib/refund-crypto.js';
-import { transition } from '../bookings/state-machine.js';
-import { recordBookingTransition } from '../../lib/metrics.js';
 import { getPrivateFileStorage } from '../files/private-storage.js';
 import {
   assertUploadSize,
@@ -28,23 +21,18 @@ import {
   normalizeUpload,
 } from '../files/upload-validation.js';
 import { refundNotifier } from '../notifications/refund-notifier.js';
-
-const MANUAL_PAYMENT_METHODS: PaymentMethod[] = [
-  PaymentMethod.pago_movil,
-  PaymentMethod.bs_transfer,
-  PaymentMethod.zelle,
-  PaymentMethod.usdt_binance,
-];
-
-const OPEN_REFUND_STATUSES: RefundRequestStatus[] = [
-  RefundRequestStatus.submitted,
-  RefundRequestStatus.in_review,
-  RefundRequestStatus.needs_info,
-  RefundRequestStatus.approved,
-];
+import {
+  bookingHasMeaningfulPayment,
+  computeRefundEligibility,
+  OPEN_REFUND_STATUSES,
+} from '../../shared/refund-eligibility.js';
+import { settingsService } from '../settings/service.js';
+import { stagedUploadService, uploaderKeyFor } from './staged-upload-service.js';
+import { submitRefundRequestJson, SubmitRefundJsonInput, SYSTEM_CARD_PREFIX, SYSTEM_CONFIRMATION_PREFIX } from './refund-submit.js';
+import { mapCustomerRefundRequest } from './refund-customer-view.js';
 
 export class RefundService {
-  private async assertBookingAccess(
+  async assertBookingAccess(
     code: string,
     token?: string,
     user?: { id: string; role?: string }
@@ -84,6 +72,110 @@ export class RefundService {
     });
   }
 
+  async computeEligibilityForBooking(booking: {
+    id: string;
+    status: BookingStatus;
+    paymentMode: string;
+    payments: { status: string }[];
+  }) {
+    const openRefund = await this.getOpenRefundForBooking(booking.id);
+    const latestRefund = await prisma.refundRequest.findFirst({
+      where: { bookingId: booking.id },
+      orderBy: { createdAt: 'desc' },
+    });
+    const hasAny = Boolean(latestRefund);
+    return computeRefundEligibility({
+      bookingStatus: booking.status,
+      paymentMode: booking.paymentMode as any,
+      hasOpenRefundRequest: Boolean(openRefund),
+      hasAnyRefundRequest: hasAny,
+      latestRefundStatus: latestRefund?.status,
+      hasVerifiedOrSubmittedPayment: bookingHasMeaningfulPayment(booking.payments as any),
+    });
+  }
+
+  filterAllowedActions(
+    actions: ('report_payment' | 'cancel' | 'request_refund')[],
+    eligibility: ReturnType<typeof computeRefundEligibility>
+  ) {
+    let out = [...actions];
+    if (!eligibility.eligible) {
+      out = out.filter((a) => a !== 'request_refund');
+    }
+    return out;
+  }
+
+  async stageUpload(
+    code: string,
+    file: Express.Multer.File,
+    token?: string,
+    user?: { id: string; role?: string }
+  ) {
+    const { booking } = await this.assertBookingAccess(code, token, user);
+    const key = uploaderKeyFor(user, booking.contactEmail);
+    return stagedUploadService.createStagedUpload(booking.id, key, file);
+  }
+
+  async deleteStagedUpload(
+    code: string,
+    uploadId: string,
+    token?: string,
+    user?: { id: string; role?: string }
+  ) {
+    const { booking } = await this.assertBookingAccess(code, token, user);
+    const key = uploaderKeyFor(user, booking.contactEmail);
+    await stagedUploadService.deleteStagedUpload(booking.id, key, uploadId);
+  }
+
+  async submitJson(
+    code: string,
+    input: SubmitRefundJsonInput,
+    idempotencyKey: string | undefined,
+    token?: string,
+    user?: { id: string; role?: string }
+  ) {
+    const { booking } = await this.assertBookingAccess(code, token, user);
+    const eligibility = await this.computeEligibilityForBooking(booking);
+    if (!eligibility.eligible) {
+      throw new BadRequestError(eligibility.message_key);
+    }
+
+    if (idempotencyKey) {
+      const existing = await prisma.refundIdempotencyKey.findUnique({
+        where: { bookingId_key: { bookingId: booking.id, key: idempotencyKey } },
+      });
+      if (existing && existing.expiresAt > new Date()) {
+        return existing.responseJson as object;
+      }
+    }
+
+    const open = await this.getOpenRefundForBooking(booking.id);
+    if (open) throw new BadRequestError('A refund request is already open for this booking');
+
+    await submitRefundRequestJson(booking, input, { user });
+
+    const response = await this.getRefundRequestForCustomer(code, token, user);
+
+    if (idempotencyKey) {
+      await prisma.refundIdempotencyKey.upsert({
+        where: { bookingId_key: { bookingId: booking.id, key: idempotencyKey } },
+        create: {
+          bookingId: booking.id,
+          key: idempotencyKey,
+          responseJson: response as any,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+        update: {
+          responseJson: response as any,
+          expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+      });
+    }
+
+    return response;
+  }
+
+  /** Legacy multipart submit (backward compatible). */
   async createRefundRequest(
     code: string,
     input: {
@@ -97,137 +189,47 @@ export class RefundService {
     token?: string,
     user?: { id: string; role?: string }
   ) {
+    const documents = input.document_kinds.map((kind, i) => ({
+      slot: (kind === 'payment_proof'
+        ? 'payment_proof'
+        : kind === 'booking_confirmation'
+          ? 'booking_confirmation'
+          : 'other') as 'payment_proof' | 'booking_confirmation' | 'other',
+      upload_id: undefined as string | undefined,
+      reuse: undefined as undefined,
+    }));
+
     const { booking } = await this.assertBookingAccess(code, token, user);
-
-    if (booking.paymentMode === 'at_hotel') {
-      throw new BadRequestError('Refunds are not available for pay-at-hotel bookings');
+    const uploaderKey = uploaderKeyFor(user, booking.contactEmail);
+    const uploadIds: string[] = [];
+    for (const file of input.files) {
+      const staged = await stagedUploadService.createStagedUpload(booking.id, uploaderKey, file);
+      uploadIds.push(staged.upload_id);
     }
-
-    const existingOpen = await this.getOpenRefundForBooking(booking.id);
-    const needsCancelTransition =
-      booking.status === BookingStatus.payment_submitted ||
-      booking.status === BookingStatus.payment_verified ||
-      booking.status === BookingStatus.confirmed;
-
-    if (booking.status === BookingStatus.refund_pending && existingOpen) {
-      throw new BadRequestError('A refund request is already open for this booking');
-    }
-    if (needsCancelTransition) {
-    } else if (booking.status === BookingStatus.refund_pending && !existingOpen) {
-    } else {
-      throw new InvalidTransitionError('Cannot request refund from current booking status');
-    }
-
-    const paidMethod =
-      booking.payments.find((p) => p.status === 'verified')?.method ||
-      booking.paymentMethodPref ||
-      booking.payments[0]?.method;
-
-    const requiresProof =
-      paidMethod && MANUAL_PAYMENT_METHODS.includes(paidMethod as PaymentMethod);
-    const kinds = input.document_kinds || [];
-    if (requiresProof && !kinds.includes('payment_proof')) {
-      throw new BadRequestError('Payment proof document is required for this payment method');
-    }
-
-    if (input.files.length > 5) {
-      throw new BadRequestError('Maximum 5 files per request');
-    }
-
-    const enc = encryptRefundPayload(input.destination_details);
-    const requestedBy = user?.id || booking.contactEmail;
-
-    const refundRequest = await prisma.$transaction(async (tx) => {
-      if (needsCancelTransition) {
-        const next = transition({
-          currentStatus: booking.status,
-          event: 'cancel',
-          actorType: 'customer',
-          paymentMode: 'online',
-          note: 'Cancelación con solicitud de reembolso',
-        });
-        const updated = await tx.booking.updateMany({
-          where: { id: booking.id, status: next.fromStatus },
-          data: { status: next.toStatus },
-        });
-        if (updated.count === 0) throw new InvalidTransitionError('State transition conflict');
-        await tx.bookingEvent.create({
-          data: {
-            bookingId: booking.id,
-            event: next.event,
-            fromStatus: next.fromStatus,
-            toStatus: next.toStatus,
-            actorType: next.actorType,
-            note: next.note,
-          },
-        });
+    let fileIdx = 0;
+    for (const doc of documents) {
+      if (doc.slot === 'other' && !input.files.length) continue;
+      if (fileIdx < uploadIds.length) {
+        doc.upload_id = uploadIds[fileIdx++];
       }
-
-      const rr = await tx.refundRequest.create({
-        data: {
-          bookingId: booking.id,
-          status: RefundRequestStatus.submitted,
-          reasonCode: input.reason_code,
-          reasonText: input.reason_text?.slice(0, 1000) || null,
-          requestedBy,
-          destinationMethod: input.destination_method,
-          destinationDetailsEnc: enc,
-        },
-      });
-
-      await tx.refundEvent.create({
-        data: {
-          refundRequestId: rr.id,
-          fromStatus: null,
-          toStatus: RefundRequestStatus.submitted,
-          actorType: 'customer',
-          actorId: user?.id || null,
-          note: 'Refund request submitted',
-        },
-      });
-
-      return rr;
-    });
-
-    recordBookingTransition('cancel');
-
-    const storage = getPrivateFileStorage();
-    for (let i = 0; i < input.files.length; i++) {
-      const file = input.files[i];
-      assertUploadSize(file.buffer);
-      const mime = detectMime(file.buffer);
-      if (!mime) throw new BadRequestError('Unsupported file type');
-      const normalized = await normalizeUpload(file.buffer, mime);
-      await storage.scanHook('', normalized.data);
-      const ext =
-        normalized.mime === 'application/pdf'
-          ? '.pdf'
-          : normalized.mime === 'image/png'
-            ? '.png'
-            : '.jpg';
-      const key = await storage.put(normalized.data, { ext });
-      const kind = (kinds[i] as RefundDocumentKind) || RefundDocumentKind.other;
-      await prisma.refundDocument.create({
-        data: {
-          refundRequestId: refundRequest.id,
-          kind,
-          storageKey: key,
-          originalName: file.originalname.slice(0, 255),
-          mimeType: normalized.mime,
-          sizeBytes: normalized.data.length,
-          uploadedBy: RefundDocumentUploadedBy.customer,
-        },
-      });
     }
 
-    await refundNotifier.queueRefundEvent(booking.code, 'refund.request_received', {
-      recipient: booking.contactEmail,
-      name: booking.contactName,
-      locale: booking.locale,
-      userId: booking.userId,
-    });
-
-    return this.getRefundRequestForCustomer(code, token, user);
+    return this.submitJson(
+      code,
+      {
+        reason: input.reason_code,
+        reason_text: input.reason_text,
+        destination: {
+          method: input.destination_method,
+          details: input.destination_details,
+        },
+        documents: documents.filter((d) => d.upload_id || d.slot !== 'other'),
+        accept_cancellation: true,
+      },
+      undefined,
+      token,
+      user
+    );
   }
 
   async getRefundRequestForCustomer(code: string, token?: string, user?: { id: string; role?: string }) {
@@ -244,39 +246,9 @@ export class RefundService {
       return { status: 'none' as const };
     }
 
-    const dest = maskDestinationForList(
-      decryptRefundPayload<Record<string, unknown>>(rr.destinationDetailsEnc)
-    );
-
-    return {
-      id: rr.id,
-      status: rr.status,
-      reason_code: rr.reasonCode,
-      reason_text: rr.reasonText,
-      destination_method: rr.destinationMethod,
-      destination_details_masked: dest,
-      staff_message: rr.staffMessage,
-      approved_amount: rr.approvedAmount ? Number(rr.approvedAmount) : null,
-      approved_currency: rr.approvedCurrency,
-      rejection_reason: rr.rejectionReason,
-      refund_reference:
-        rr.status === RefundRequestStatus.completed ? rr.refundReference : null,
-      timeline: rr.events.map((e) => ({
-        at: e.createdAt.toISOString(),
-        from_status: e.fromStatus,
-        to_status: e.toStatus,
-        actor_type: e.actorType,
-        note: e.note,
-      })),
-      documents: rr.documents.map((d) => ({
-        id: d.id,
-        kind: d.kind,
-        original_name: d.originalName,
-        mime_type: d.mimeType,
-        size_bytes: d.sizeBytes,
-        created_at: d.createdAt.toISOString(),
-      })),
-    };
+    const sla = await settingsService.getGlobalCheckoutSettings();
+    const reviewHours = sla.refundReviewSlaHours ?? 48;
+    return mapCustomerRefundRequest(rr, reviewHours);
   }
 
   async addDocuments(
@@ -355,19 +327,36 @@ export class RefundService {
       },
     });
     if (!doc) throw new NotFoundError('Document not found');
+
+    if (doc.storageKey.startsWith(SYSTEM_CONFIRMATION_PREFIX)) {
+      const { bookingService } = await import('../bookings/service.js');
+      const { buffer, filename } = await bookingService.streamConfirmationPdf(code, token, user);
+      return {
+        data: buffer,
+        doc: { ...doc, mimeType: 'application/pdf', originalName: filename },
+      };
+    }
+    if (doc.storageKey.startsWith(SYSTEM_CARD_PREFIX)) {
+      const payId = doc.linkedPaymentId || doc.storageKey.slice(SYSTEM_CARD_PREFIX.length);
+      const pay = await prisma.payment.findUnique({ where: { id: payId } });
+      const payload = Buffer.from(
+        JSON.stringify({
+          payment_id: pay?.id,
+          method: pay?.method,
+          reference: pay?.reference,
+          status: pay?.status,
+          external_session_id: pay?.externalSessionId,
+        }),
+        'utf8'
+      );
+      return {
+        data: payload,
+        doc: { ...doc, mimeType: 'application/json', originalName: 'card-payment-record.json' },
+      };
+    }
+
     const data = await getPrivateFileStorage().read(doc.storageKey);
     return { data, doc };
-  }
-
-  filterAllowedActions(
-    actions: ('report_payment' | 'cancel' | 'request_refund')[],
-    bookingStatus: BookingStatus,
-    hasOpenRefund: boolean
-  ) {
-    if (bookingStatus === BookingStatus.refund_pending && hasOpenRefund) {
-      return actions.filter((a) => a !== 'request_refund');
-    }
-    return actions;
   }
 }
 

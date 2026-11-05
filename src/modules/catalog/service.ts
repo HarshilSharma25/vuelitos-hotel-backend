@@ -14,6 +14,7 @@ import {
   FxRates,
 } from '../pricing/index.js';
 import { getCaracasWallDate } from '../../lib/caracas-time.js';
+import { asNumberArray } from '../../lib/json.js';
 import {
   InvalidStayWindowError,
   NotFoundError,
@@ -246,7 +247,7 @@ export class CatalogService {
           occupancy: r.occupancy,
           pricingUnit: r.pricingUnit as any,
           netRate: r.netRate.toString(),
-          daysOfWeek: r.daysOfWeek,
+          daysOfWeek: asNumberArray(r.daysOfWeek),
           minNights: r.minNights,
           maxNights: r.maxNights,
           isActive: r.isActive,
@@ -506,7 +507,7 @@ export class CatalogService {
         occupancy: r.occupancy,
         pricingUnit: r.pricingUnit as any,
         netRate: r.netRate.toString(),
-        daysOfWeek: r.daysOfWeek,
+        daysOfWeek: asNumberArray(r.daysOfWeek),
         minNights: r.minNights,
         maxNights: r.maxNights,
         isActive: r.isActive,
@@ -812,7 +813,7 @@ export class CatalogService {
         occupancy: r.occupancy,
         pricingUnit: r.pricingUnit as any,
         netRate: r.netRate.toString(),
-        daysOfWeek: r.daysOfWeek,
+        daysOfWeek: asNumberArray(r.daysOfWeek),
         minNights: r.minNights,
         maxNights: r.maxNights,
         isActive: r.isActive,

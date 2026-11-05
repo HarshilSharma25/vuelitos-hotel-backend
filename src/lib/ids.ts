@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma.js';
 
 export function generateAccessToken(): { token: string; accessKey: string } {
@@ -29,10 +30,23 @@ export function verifyAccessToken(token: string, storedAccessKey: string): boole
   }
 }
 
-export async function generateBookingCode(tx: any = prisma): Promise<string> {
+async function nextBookingSequence(db: Prisma.TransactionClient): Promise<string> {
+  await db.$executeRaw`
+    INSERT INTO booking_code_counters (id, seq)
+    VALUES (1, LAST_INSERT_ID(1))
+    ON DUPLICATE KEY UPDATE seq = LAST_INSERT_ID(seq + 1)
+  `;
+  const rows = await db.$queryRaw<Array<{ seq: bigint | number | string }>>`
+    SELECT LAST_INSERT_ID() AS seq
+  `;
+  return String(rows[0]?.seq ?? '1');
+}
+
+export async function generateBookingCode(tx?: Prisma.TransactionClient): Promise<string> {
   const currentYear = new Date().getUTCFullYear();
-  const result: any = await tx.$queryRaw`SELECT nextval('booking_code_seq')::text as seq`;
-  const seqNum = result[0]?.seq ?? '1';
+  const seqNum = tx
+    ? await nextBookingSequence(tx)
+    : await prisma.$transaction((inner) => nextBookingSequence(inner));
   const padded = seqNum.padStart(6, '0');
   return `VH-${currentYear}-${padded}`;
 }

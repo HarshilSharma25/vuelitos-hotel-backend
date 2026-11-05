@@ -1,5 +1,5 @@
 datasource db {
-  provider = "postgresql"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
@@ -160,10 +160,10 @@ model Hotel {
   isActive                Boolean               @default(true) @map("is_active")
   petsAllowed             Boolean               @default(false) @map("pets_allowed")
   childBandsEnabled       Boolean               @default(false) @map("child_bands_enabled")
-  description             String?
+  description             String?               @db.Text
   amenities               Json                  @default("[]")
-  coverImageKey           String?               @map("cover_image_key")
-  coverImageUrl           String?               @map("cover_image_url")
+  coverImageKey           String?               @map("cover_image_key") @db.VarChar(512)
+  coverImageUrl           String?               @map("cover_image_url") @db.Text
   payNowEnabled           Boolean?              @map("pay_now_enabled")
   payAtHotelEnabled       Boolean?              @map("pay_at_hotel_enabled")
   paymentWindowHours      Int?                  @map("payment_window_hours")
@@ -224,13 +224,16 @@ model Rate {
   percentOfAdult Decimal?     @map("percent_of_adult") @db.Decimal(5, 2)
   childAgeMin    Int?         @map("child_age_min")
   childAgeMax    Int?         @map("child_age_max")
-  daysOfWeek     Int[]        @map("days_of_week")
+  daysOfWeek     Json         @default("[]") @map("days_of_week")
+  // Kept in sync by a BEFORE INSERT/UPDATE trigger. MySQL cannot put JSON in a unique index.
+  daysOfWeekKey  String       @default("[]") @map("days_of_week_key") @db.VarChar(64)
   minNights      Int          @default(1) @map("min_nights")
   maxNights      Int?         @map("max_nights")
   packageNights  Int?         @map("package_nights")
   sourcePage     Int?         @map("source_page")
   isActive       Boolean      @default(true) @map("is_active")
 
+  @@unique([roomTypeId, seasonId, mealPlan, occupancy, concept, priceKind, daysOfWeekKey, minNights, childAgeMin, childAgeMax, isActive], map: "rates_unica_por_ocupacion")
   @@map("rates")
 }
 
@@ -277,12 +280,12 @@ model Booking {
   code              String         @unique
   status            BookingStatus  @default(requested)
   userId            String?        @map("user_id")
-  accessKey         String         @map("access_key") @db.Uuid
+  accessKey         String         @map("access_key") @db.Char(36)
   locale            String         @default("es")
   contactName       String         @map("contact_name")
   contactEmail      String         @map("contact_email")
   contactPhone      String?        @map("contact_phone")
-  notes             String?
+  notes             String?        @db.Text
   guestDetails      Json?          @map("guest_details")
   paymentMethodPref PaymentMethod? @map("payment_method_pref")
   termsAcceptedAt   DateTime       @map("terms_accepted_at")
@@ -291,7 +294,7 @@ model Booking {
   slaDueAt          DateTime?      @map("sla_due_at")
   paymentMode       PaymentMode    @default(online) @map("payment_mode")
   paymentWindowHours Int?          @map("payment_window_hours")
-  remindersSent     Int[]          @default([]) @map("reminders_sent")
+  remindersSent     Json           @default("[]") @map("reminders_sent")
   createdAt         DateTime       @default(now()) @map("created_at")
   updatedAt         DateTime       @updatedAt @map("updated_at")
   items             BookingItem[]
@@ -302,6 +305,7 @@ model Booking {
   refundStagedUploads RefundStagedUpload[]
 
   @@index([userId])
+  @@index([status, slaDueAt])
   @@map("bookings")
 }
 
@@ -312,7 +316,10 @@ model RefundRequest {
   status                  RefundRequestStatus  @default(submitted)
   publicReference         String?              @unique @map("public_reference")
   reasonCode              RefundReasonCode     @map("reason_code")
-  reasonText              String?              @map("reason_text") @db.VarChar(1000)
+  reasonText              String?              @map("reason_text") @db.Text
+  // Set by trigger: booking id while the request is open, NULL once closed.
+  // MySQL unique indexes allow many NULLs, which replaces the Postgres partial index.
+  openBookingKey          String?              @unique @map("open_booking_key") @db.Char(36)
   requestedBy             String               @map("requested_by")
   destinationMethod       String               @map("destination_method")
   destinationDetailsEnc   String               @map("destination_details_enc") @db.Text
@@ -391,7 +398,7 @@ model RefundEvent {
   toStatus        RefundRequestStatus  @map("to_status")
   actorType       String               @map("actor_type")
   actorId         String?              @map("actor_id")
-  note            String?
+  note            String?              @db.Text
   createdAt       DateTime             @default(now()) @map("created_at")
 
   @@map("refund_events")
@@ -421,7 +428,7 @@ model BookingEvent {
   toStatus   BookingStatus  @map("to_status")
   actorType  String         @map("actor_type")
   actorId    String?        @map("actor_id")
-  note       String?
+  note       String?        @db.Text
   createdAt  DateTime       @default(now()) @map("created_at")
 
   @@map("booking_events")
@@ -437,8 +444,8 @@ model Payment {
   amountReceived     Decimal?      @map("amount_received") @db.Decimal(12, 2)
   reference          String
   status             PaymentStatus @default(submitted)
-  rejectionReason    String?       @map("rejection_reason")
-  rejectionNotes     String?       @map("rejection_notes")
+  rejectionReason    String?       @map("rejection_reason") @db.Text
+  rejectionNotes     String?       @map("rejection_notes") @db.Text
   submittedAt        DateTime      @default(now()) @map("submitted_at")
   verifiedAt         DateTime?     @map("verified_at")
   verifiedBy         String?       @map("verified_by")
@@ -476,7 +483,7 @@ model AvailabilityCheck {
   status    CheckStatus @default(pending)
   checkedBy String?     @map("checked_by")
   checkedAt DateTime?   @map("checked_at")
-  note      String?
+  note      String?     @db.Text
 
   @@map("availability_checks")
 }
@@ -486,7 +493,7 @@ model HotelImage {
   hotelId    String      @map("hotel_id")
   hotel      Hotel       @relation(fields: [hotelId], references: [id], onDelete: Restrict)
   key        String
-  sourceUrl  String?     @map("source_url")
+  sourceUrl  String?     @map("source_url") @db.Text
   sourceKind String?     @map("source_kind")
   status     ImageStatus @default(held)
   sortOrder  Int         @default(0) @map("sort_order")
@@ -498,12 +505,12 @@ model HotelImage {
 model Quote {
   id                String      @id @default(uuid())
   code              String      @unique
-  tokenKey          String      @map("token_key") @db.Uuid
+  tokenKey          String      @map("token_key") @db.Char(36)
   status            QuoteStatus @default(draft)
   lines             Json
   commissionPercent Decimal     @map("commission_percent") @db.Decimal(5, 2)
   commissionAmount  Decimal     @map("commission_amount") @db.Decimal(12, 2)
-  internalNotes     String?     @map("internal_notes")
+  internalNotes     String?     @map("internal_notes") @db.Text
   expiresAt         DateTime    @map("expires_at")
 
   @@map("quotes")
@@ -514,7 +521,7 @@ model Lead {
   name      String
   email     String
   phone     String?
-  message   String?
+  message   String?  @db.Text
   createdAt DateTime @default(now()) @map("created_at")
 
   @@map("leads")
@@ -537,7 +544,7 @@ model Session {
   user       StaffUser @relation(fields: [userId], references: [id], onDelete: Cascade)
   expiresAt  DateTime  @map("expires_at")
   lastSeenAt DateTime  @default(now()) @map("last_seen_at")
-  userAgent  String?   @map("user_agent")
+  userAgent  String?   @map("user_agent") @db.Text
 
   @@map("sessions")
 }
@@ -555,13 +562,20 @@ model CheckoutSettings {
   payAtHotelEnabled       Boolean  @default(true) @map("pay_at_hotel_enabled")
   cardPaymentsEnabled     Boolean  @default(true) @map("card_payments_enabled")
   paymentWindowHours      Int      @default(48) @map("payment_window_hours")
-  reminderOffsetsPct      Int[]    @default([50, 90]) @map("reminder_offsets_pct")
+  reminderOffsetsPct      Json     @default("[50, 90]") @map("reminder_offsets_pct")
   autoConfirmAfterPayment Boolean  @default(false) @map("auto_confirm_after_payment")
   refundReviewSlaHours    Int      @default(48) @map("refund_review_sla_hours")
   createdAt               DateTime @default(now()) @map("created_at")
   updatedAt               DateTime @updatedAt @map("updated_at")
 
   @@map("checkout_settings")
+}
+
+model BookingCodeCounter {
+  id  Int    @id
+  seq BigInt @default(0)
+
+  @@map("booking_code_counters")
 }
 
 model SettingsAudit {

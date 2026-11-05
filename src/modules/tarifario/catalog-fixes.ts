@@ -1,4 +1,5 @@
 import { prisma } from '../../lib/prisma.js';
+import { asNumberArray } from '../../lib/json.js';
 import { resolveSingleRoomStay, parseStayWindow, SeasonInput } from '../pricing/index.js';
 import { ratesService } from '../rates/service.js';
 
@@ -54,7 +55,7 @@ export async function runCatalogFixes(fixes: CatalogFix[]): Promise<{ fixId: str
           occupancy: r.occupancy,
           pricingUnit: r.pricingUnit as any,
           netRate: r.netRate.toString(),
-          daysOfWeek: r.daysOfWeek,
+          daysOfWeek: asNumberArray(r.daysOfWeek),
           minNights: r.minNights,
           maxNights: r.maxNights,
           isActive: r.isActive,
@@ -112,7 +113,7 @@ export async function runCatalogFixes(fixes: CatalogFix[]): Promise<{ fixId: str
           occupancy: r.occupancy,
           pricingUnit: r.pricingUnit as any,
           netRate: r.netRate.toString(),
-          daysOfWeek: r.daysOfWeek,
+          daysOfWeek: asNumberArray(r.daysOfWeek),
           minNights: r.minNights,
           maxNights: r.maxNights,
           isActive: r.isActive,

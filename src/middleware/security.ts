@@ -29,7 +29,7 @@ const devLocalOrigins = [
 const allowedOriginsList = [
   env.PUBLIC_API_ORIGIN,
   ...env.ALLOWED_ORIGINS.split(',').map((o) => o.trim()).filter(Boolean),
-  ...(env.NODE_ENV === 'development' ? devLocalOrigins : []),
+  ...(env.NODE_ENV === 'development' || env.NODE_ENV === 'local' ? devLocalOrigins : []),
 ]
   .map(normalizeOrigin)
   .filter(Boolean);

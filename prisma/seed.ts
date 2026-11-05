@@ -1,3 +1,5 @@
+import '../src/config/env.js';
+import { withMutableBookingEvents } from '../src/lib/booking-events.js';
 import {
   PrismaClient,
   BookingStatus,
@@ -23,9 +25,9 @@ export async function main() {
 
   // 1. Clean existing records safely with triggers disabled on immutable tables
   console.log('🧹 Cleaning previous seed data...');
-  await prisma.$executeRawUnsafe('ALTER TABLE booking_events DISABLE TRIGGER ALL;');
-  await prisma.$executeRawUnsafe('DELETE FROM booking_events;');
-  await prisma.$executeRawUnsafe('ALTER TABLE booking_events ENABLE TRIGGER ALL;');
+  await withMutableBookingEvents(async () => {
+    await prisma.$executeRawUnsafe('DELETE FROM booking_events;');
+  });
   await prisma.$executeRawUnsafe('DELETE FROM payments;');
   await prisma.$executeRawUnsafe('DELETE FROM availability_checks;');
   await prisma.$executeRawUnsafe('DELETE FROM booking_items;');

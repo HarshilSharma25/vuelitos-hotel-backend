@@ -10,7 +10,7 @@ server.on('error', (err: NodeJS.ErrnoException) => {
   if (err.code === 'EADDRINUSE') {
     logger.error(
       { port: env.PORT, err: err.message },
-      `Port ${env.PORT} is already in use. Set PORT in .env.local (e.g. 3002) and point VITE_HOTEL_BACKEND_URL at the same URL.`
+      `Port ${env.PORT} is already in use. Set PORT in the env file for NODE_ENV=${env.NODE_ENV}.`
     );
   } else {
     logger.error({ err }, 'Server failed to start');

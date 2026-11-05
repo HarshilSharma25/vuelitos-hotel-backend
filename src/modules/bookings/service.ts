@@ -12,6 +12,7 @@ import {
   verifyAccessToken,
 } from '../../lib/ids.js';
 import { calculateSlaDueAt, getCaracasWallDate } from '../../lib/caracas-time.js';
+import { asNumberArray } from '../../lib/json.js';
 import {
   BadRequestError,
   GroupRequestRequiredError,
@@ -245,7 +246,7 @@ export class BookingService {
           occupancy: r.occupancy,
           pricingUnit: r.pricingUnit as any,
           netRate: r.netRate.toString(),
-          daysOfWeek: r.daysOfWeek,
+          daysOfWeek: asNumberArray(r.daysOfWeek),
           minNights: r.minNights,
           maxNights: r.maxNights,
           isActive: r.isActive,

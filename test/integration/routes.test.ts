@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
 import { app } from '../../src/app.js';
 import { prisma } from '../../src/lib/prisma.js';
+import { withMutableBookingEvents } from '../../src/lib/booking-events.js';
 import argon2 from 'argon2';
 
 describe('End-to-End API Routes Integration', () => {
@@ -11,7 +12,7 @@ describe('End-to-End API Routes Integration', () => {
   let adminSessionToken: string;
 
   async function cleanTestData() {
-    await prisma.$executeRawUnsafe('ALTER TABLE booking_events DISABLE TRIGGER ALL;');
+    await withMutableBookingEvents(async () => {
     const testHotels = await prisma.hotel.findMany({
       where: { slug: 'hotel-playa-el-agua' },
     });
@@ -33,7 +34,7 @@ describe('End-to-End API Routes Integration', () => {
       await prisma.availabilityCheck.deleteMany({ where: { hotelId: h.id } });
       await prisma.hotel.delete({ where: { id: h.id } });
     }
-    await prisma.$executeRawUnsafe('ALTER TABLE booking_events ENABLE TRIGGER ALL;');
+    });
     try {
       const { redis } = await import('../../src/lib/redis.js');
       const keys = await redis.keys('ratelimit:*');

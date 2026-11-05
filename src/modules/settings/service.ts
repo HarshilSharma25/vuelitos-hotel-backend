@@ -4,6 +4,7 @@ import { logger } from '../../lib/logger.js';
 import { env } from '../../config/env.js';
 import { BadRequestError, NotFoundError } from '../../lib/errors.js';
 import type { CheckoutSettings } from '@prisma/client';
+import { asNumberArray } from '../../lib/json.js';
 
 export interface EffectiveCheckoutSettings {
   payNowEnabled: boolean;
@@ -77,7 +78,7 @@ export class SettingsService {
         payAtHotelEnabled: global.payAtHotelEnabled,
         cardPaymentsEnabled: global.cardPaymentsEnabled,
         paymentWindowHours: global.paymentWindowHours,
-        reminderOffsetsPct: global.reminderOffsetsPct,
+        reminderOffsetsPct: asNumberArray(global.reminderOffsetsPct),
         autoConfirmAfterPayment: global.autoConfirmAfterPayment,
         refundReviewSlaHours: global.refundReviewSlaHours ?? 48,
       };
@@ -99,7 +100,7 @@ export class SettingsService {
           payAtHotelEnabled: global.payAtHotelEnabled,
           cardPaymentsEnabled: global.cardPaymentsEnabled,
           paymentWindowHours: global.paymentWindowHours,
-          reminderOffsetsPct: global.reminderOffsetsPct,
+          reminderOffsetsPct: asNumberArray(global.reminderOffsetsPct),
           autoConfirmAfterPayment: global.autoConfirmAfterPayment,
           refundReviewSlaHours: global.refundReviewSlaHours ?? 48,
         };
@@ -119,9 +120,9 @@ export class SettingsService {
             ? hotel.paymentWindowHours
             : global.paymentWindowHours;
 
-        let reminderOffsetsPct = global.reminderOffsetsPct;
+        let reminderOffsetsPct = asNumberArray(global.reminderOffsetsPct);
         if (hotel.reminderOffsetsPct && Array.isArray(hotel.reminderOffsetsPct)) {
-          reminderOffsetsPct = hotel.reminderOffsetsPct as number[];
+          reminderOffsetsPct = asNumberArray(hotel.reminderOffsetsPct);
         }
 
         const autoConfirmAfterPayment =
@@ -205,7 +206,9 @@ export class SettingsService {
         paymentWindowHours:
           data.paymentWindowHours !== undefined ? data.paymentWindowHours : current.paymentWindowHours,
         reminderOffsetsPct:
-          data.reminderOffsetsPct !== undefined ? data.reminderOffsetsPct : current.reminderOffsetsPct,
+          data.reminderOffsetsPct !== undefined
+            ? data.reminderOffsetsPct
+            : asNumberArray(current.reminderOffsetsPct),
         autoConfirmAfterPayment:
           data.autoConfirmAfterPayment !== undefined
             ? data.autoConfirmAfterPayment

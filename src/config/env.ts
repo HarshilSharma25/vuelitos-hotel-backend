@@ -16,11 +16,21 @@ function resolveProjectRoot(): string {
 
 const projectRoot = resolveProjectRoot();
 
-function applyEnvFile(envFileName: string, onlyMissing: boolean) {
+function unquoteEnvValue(val: string): string {
+  if (
+    (val.startsWith('"') && val.endsWith('"')) ||
+    (val.startsWith("'") && val.endsWith("'"))
+  ) {
+    return val.slice(1, -1);
+  }
+  return val;
+}
+
+function applyEnvFile(envFileName: string, onlyMissing: boolean): boolean {
   const envPath = path.isAbsolute(envFileName)
     ? envFileName
     : path.join(projectRoot, envFileName);
-  if (!fs.existsSync(envPath)) return;
+  if (!fs.existsSync(envPath)) return false;
   const content = fs.readFileSync(envPath, 'utf8');
   for (const line of content.split('\n')) {
     const trimmed = line.trim();
@@ -28,35 +38,45 @@ function applyEnvFile(envFileName: string, onlyMissing: boolean) {
     const idx = trimmed.indexOf('=');
     if (idx === -1) continue;
     const key = trimmed.slice(0, idx).trim();
-    const val = trimmed.slice(idx + 1).trim();
+    const val = unquoteEnvValue(trimmed.slice(idx + 1).trim());
     if (!onlyMissing || process.env[key] === undefined || process.env[key] === '') {
       process.env[key] = val;
     }
   }
+  return true;
 }
 
-// Base first, then overrides (.env.uat must not block PORT in .env)
-const layeredEnvFiles = [
-  '.env',
-  '.env.local',
-  process.env.NODE_ENV ? `.env.${process.env.NODE_ENV}` : null,
-].filter(Boolean) as string[];
-
-for (const envFileName of layeredEnvFiles) {
-  applyEnvFile(envFileName, true);
+/**
+ * One file per environment, same mapping as the flight server:
+ * production/prod -> .env.prod
+ * development/dev -> .env.dev
+ * uat -> .env.uat
+ * local, test, and unset -> .env.local
+ * ENV_FILE wins when set.
+ * Values already in the process environment are kept (PM2 PORT, NODE_ENV, …).
+ */
+function resolveEnvFileName(): string {
+  if (process.env.ENV_FILE) return process.env.ENV_FILE;
+  const nodeEnv = process.env.NODE_ENV?.toLowerCase();
+  if (nodeEnv === 'production' || nodeEnv === 'prod') return '.env.prod';
+  if (nodeEnv === 'development' || nodeEnv === 'dev') return '.env.dev';
+  if (nodeEnv === 'uat') return '.env.uat';
+  return '.env.local';
 }
-// Local overrides (DATABASE_URL, etc.) — not used by Prisma CLI; see npm run prisma:migrate:local
-applyEnvFile('.env.local', false);
-if (process.env.ENV_FILE) {
-  applyEnvFile(process.env.ENV_FILE, false);
+
+const envFileName = resolveEnvFileName();
+const loaded = applyEnvFile(envFileName, true);
+if (loaded) {
+  console.log(`Loaded environment from: ${envFileName}`);
+} else {
+  console.warn(`Warning: Could not load ${envFileName}. Falling back to .env if it exists.`);
+  applyEnvFile('.env', true);
 }
 
 const envSchema = z.object({
   PORT: z.coerce.number().default(3000),
-  NODE_ENV: z.enum(['development', 'production', 'test', 'uat']).default('development'),
-  DATABASE_URL: z
-    .string()
-    .default('postgresql://pavitrasharmna@localhost:5432/hotel_backend?schema=public'),
+  NODE_ENV: z.enum(['local', 'development', 'production', 'test', 'uat']).default('local'),
+  DATABASE_URL: z.string().default('mysql://root:password@127.0.0.1:3306/hotel_backend'),
   REDIS_URL: z.string().default('redis://localhost:6379'),
   SESSION_SECRET: z
     .string()

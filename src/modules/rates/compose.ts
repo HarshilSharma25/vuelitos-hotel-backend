@@ -1,3 +1,4 @@
+import type { Prisma } from '@prisma/client';
 import { prisma } from '../../lib/prisma.js';
 import { redis } from '../../lib/redis.js';
 import { logger } from '../../lib/logger.js';
@@ -18,7 +19,7 @@ export interface ComposeResult {
   bcvValueDate: string;
 }
 
-const RATES_ADVISORY_LOCK_ID = 424242;
+const RATES_LOCK_NAME = 'hotel_rates_compose';
 
 export async function composeAndPersistRates(input: ComposeInput): Promise<ComposeResult> {
   const { freshBcv, freshUsdt } = input;
@@ -28,7 +29,26 @@ export async function composeAndPersistRates(input: ComposeInput): Promise<Compo
   }
 
   return prisma.$transaction(async (tx) => {
-    await tx.$executeRaw`SELECT pg_advisory_xact_lock(${RATES_ADVISORY_LOCK_ID})`;
+    const locked = await tx.$queryRaw<Array<{ got: bigint | number | null }>>`
+      SELECT GET_LOCK(${RATES_LOCK_NAME}, 10) AS got
+    `;
+    if (Number(locked[0]?.got) !== 1) {
+      throw new Error('Could not acquire rates compose lock');
+    }
+
+    try {
+      return await persistComposedRates(tx, freshBcv, freshUsdt);
+    } finally {
+      await tx.$executeRaw`SELECT RELEASE_LOCK(${RATES_LOCK_NAME})`;
+    }
+  }, { timeout: 20000 });
+}
+
+async function persistComposedRates(
+  tx: Prisma.TransactionClient,
+  freshBcv: BcvRateResult | null | undefined,
+  freshUsdt: number | null | undefined
+): Promise<ComposeResult> {
 
     let bcvUpserted = false;
     if (freshBcv) {
@@ -148,5 +168,4 @@ export async function composeAndPersistRates(input: ComposeInput): Promise<Compo
       binanceUsdt,
       bcvValueDate: bcvValueDate.toISOString().slice(0, 10),
     };
-  });
 }

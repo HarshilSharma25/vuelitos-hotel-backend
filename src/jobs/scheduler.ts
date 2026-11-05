@@ -12,6 +12,7 @@ import { handleStripeInternalEvent } from '../modules/payments/internal.service.
 import { recordBookingTransition } from '../lib/metrics.js';
 import { notifier } from '../modules/notifications/notifier.js';
 import { settingsService } from '../modules/settings/service.js';
+import { asNumberArray } from '../lib/json.js';
 
 const connection = {
   url: env.REDIS_URL,
@@ -124,7 +125,7 @@ export async function processPaymentRemindersJob() {
     const effective = await settingsService.getEffectiveCheckoutSettings(hotelId);
     const reminderOffsets = effective.reminderOffsetsPct || [50, 90];
 
-    const sent = b.remindersSent || [];
+    const sent = asNumberArray(b.remindersSent);
 
     for (const offset of reminderOffsets) {
       if (elapsedPct >= offset && !sent.includes(offset)) {
@@ -139,10 +140,11 @@ export async function processPaymentRemindersJob() {
             hoursRemaining,
           });
 
+          sent.push(offset);
           await prisma.booking.update({
             where: { id: b.id },
             data: {
-              remindersSent: { push: offset },
+              remindersSent: sent,
             },
           });
 

@@ -62,9 +62,9 @@ adminRouter.get('/bookings/inbox', requireRole('agent'), async (req, res, next) 
     const queryTerm = search || q;
     if (queryTerm) {
       where.OR = [
-        { code: { contains: queryTerm, mode: 'insensitive' } },
-        { contactName: { contains: queryTerm, mode: 'insensitive' } },
-        { contactEmail: { contains: queryTerm, mode: 'insensitive' } },
+        { code: { contains: queryTerm } },
+        { contactName: { contains: queryTerm } },
+        { contactEmail: { contains: queryTerm } },
       ];
     }
     if (overdue === 'true') {
@@ -197,6 +197,143 @@ adminRouter.get('/bookings/inbox', requireRole('agent'), async (req, res, next) 
   }
 });
 
+const CUSTOMER_BOOKING_STATUSES = new Set<string>([
+  'requested',
+  'checking_availability',
+  'awaiting_payment',
+  'payment_submitted',
+  'payment_verified',
+  'confirmed',
+  'alternatives_offered',
+  'unavailable',
+  'cancelled',
+  'refund_pending',
+  'refunded',
+]);
+
+adminRouter.get('/customers/:userId/bookings', requireRole('agent'), async (req, res, next) => {
+  try {
+    const userId = String(req.params.userId || '').trim();
+    if (!userId || userId.length > 64) {
+      throw new ValidationError('Invalid customer id');
+    }
+
+    const { status, q, page = '1', limit = '10' } = req.query as Record<string, string | undefined>;
+    const pageNum = Math.max(1, parseInt(page || '1', 10) || 1);
+    const take = Math.min(50, Math.max(1, parseInt(limit || '10', 10) || 10));
+    const skip = (pageNum - 1) * take;
+
+    const where: any = { userId };
+    if (status && status !== 'all') {
+      if (!CUSTOMER_BOOKING_STATUSES.has(status)) {
+        throw new ValidationError('Invalid status');
+      }
+      where.status = status;
+    }
+
+    const queryTerm = typeof q === 'string' ? q.trim() : '';
+    if (queryTerm) {
+      const matchingHotels = await prisma.hotel.findMany({
+        where: {
+          OR: [
+            { name: { contains: queryTerm } },
+            { destination: { contains: queryTerm } },
+            { slug: { contains: queryTerm } },
+          ],
+        },
+        select: { id: true },
+      });
+      where.OR = [
+        { code: { contains: queryTerm } },
+        { contactName: { contains: queryTerm } },
+        { contactEmail: { contains: queryTerm } },
+        ...(matchingHotels.length
+          ? [{ items: { some: { hotelId: { in: matchingHotels.map((h) => h.id) } } } }]
+          : []),
+      ];
+    }
+
+    const [bookings, total] = await Promise.all([
+      prisma.booking.findMany({
+        where,
+        orderBy: { createdAt: 'desc' },
+        skip,
+        take,
+        include: { items: true },
+      }),
+      prisma.booking.count({ where }),
+    ]);
+
+    const hotelIds = [...new Set(bookings.flatMap((b) => b.items.map((i) => i.hotelId)))];
+    const hotels = hotelIds.length
+      ? await prisma.hotel.findMany({
+          where: { id: { in: hotelIds } },
+          select: { id: true, slug: true, name: true, destination: true },
+        })
+      : [];
+    const hotelMap = new Map(hotels.map((h) => [h.id, h]));
+
+    const data = bookings.map((b) => {
+      const item = b.items[0];
+      const hotel = item ? hotelMap.get(item.hotelId) ?? null : null;
+      const totals = (b.totalsByMethod as any[]) || [];
+      const primaryTotal = totals[0];
+      const snap = (item?.priceSnapshot as any) || {};
+      const guests = item
+        ? ((item.roomSelections as any[]) || []).reduce(
+            (sum, room) => sum + (Number(room.adults) || 0) + (Number(room.children) || 0),
+            0
+          )
+        : 0;
+      const checkIn = item?.checkIn ? item.checkIn.toISOString().slice(0, 10) : null;
+      const checkOut = item?.checkOut ? item.checkOut.toISOString().slice(0, 10) : null;
+
+      return {
+        id: b.id,
+        code: b.code,
+        status: b.status,
+        payment_mode: b.paymentMode,
+        paymentMode: b.paymentMode,
+        user_id: b.userId,
+        contact_name: b.contactName,
+        contactName: b.contactName,
+        contact_email: b.contactEmail,
+        contactEmail: b.contactEmail,
+        contact_phone: b.contactPhone,
+        contactPhone: b.contactPhone,
+        notes: b.notes,
+        hotel: hotel
+          ? { id: hotel.id, slug: hotel.slug, name: hotel.name, destination: hotel.destination }
+          : null,
+        check_in: checkIn,
+        checkIn,
+        check_out: checkOut,
+        checkOut,
+        meal_plan: item?.mealPlan ?? null,
+        mealPlan: item?.mealPlan ?? null,
+        guests,
+        items_count: b.items.length,
+        total: primaryTotal?.amount != null ? Number(primaryTotal.amount) : snap?.total?.amount ?? null,
+        currency: primaryTotal?.currency ?? snap?.total?.currency ?? null,
+        created_at: b.createdAt.toISOString(),
+        createdAt: b.createdAt.toISOString(),
+      };
+    });
+
+    res.json({
+      data,
+      meta: {
+        total,
+        page: pageNum,
+        limit: take,
+        totalPages: Math.max(1, Math.ceil(total / take) || 1),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 adminRouter.get('/bookings', requireRole('agent'), async (req, res, next) => {
   try {
     const { status, overdue, q, cursor } = req.query as any;
@@ -207,9 +344,9 @@ adminRouter.get('/bookings', requireRole('agent'), async (req, res, next) => {
     }
     if (q) {
       where.OR = [
-        { code: { contains: q, mode: 'insensitive' } },
-        { contactName: { contains: q, mode: 'insensitive' } },
-        { contactEmail: { contains: q, mode: 'insensitive' } },
+        { code: { contains: q } },
+        { contactName: { contains: q } },
+        { contactEmail: { contains: q } },
       ];
     }
     if (overdue === 'true') {

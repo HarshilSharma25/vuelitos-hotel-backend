@@ -161,14 +161,13 @@ export class CatalogService {
     if (params.destination) {
       whereClause.destination = {
         contains: params.destination.replace(/-/g, ' '),
-        mode: 'insensitive',
       };
     }
     if (params.category) {
-      whereClause.category = { equals: params.category, mode: 'insensitive' };
+      whereClause.category = { equals: params.category };
     }
     if (params.q) {
-      whereClause.name = { contains: params.q, mode: 'insensitive' };
+      whereClause.name = { contains: params.q };
     }
 
     const hotels = await prisma.hotel.findMany({

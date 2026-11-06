@@ -299,6 +299,41 @@ describe('Shared Authentication & Authorization Integration', () => {
       expect(found).toBeDefined();
     });
 
+    it('agent can list this customer hotel bookings without leaking other customers', async () => {
+      const res = await request(app)
+        .get('/api/admin/customers/101/bookings?q=Customer%20One')
+        .set('Authorization', `Bearer ${agentToken}`);
+
+      expect(res.status).toBe(200);
+      expect(Array.isArray(res.body.data)).toBe(true);
+      const found = res.body.data.find((b: any) => b.code === customer1BookingCode);
+      expect(found).toBeDefined();
+      expect(found.user_id).toBe('101');
+      expect(found.hotel?.name).toBe('Hotel Shared Auth');
+      expect(found.check_in).toBe('2026-11-10');
+      expect(found.check_out).toBe('2026-11-12');
+      expect(found.guests).toBe(2);
+      expect(res.body.meta.total).toBeGreaterThanOrEqual(1);
+
+      const other = await request(app)
+        .get('/api/admin/customers/202/bookings')
+        .set('Authorization', `Bearer ${agentToken}`);
+      expect(other.status).toBe(200);
+      expect(other.body.data.find((b: any) => b.code === customer1BookingCode)).toBeUndefined();
+
+      const invalid = await request(app)
+        .get('/api/admin/customers/101/bookings?status=not_a_status')
+        .set('Authorization', `Bearer ${agentToken}`);
+      expect(invalid.status).toBe(400);
+    });
+
+    it('customer cannot list hotel bookings through the admin customer endpoint', async () => {
+      const res = await request(app)
+        .get('/api/admin/customers/101/bookings')
+        .set('Authorization', `Bearer ${customer1Token}`);
+      expect(res.status).toBe(403);
+    });
+
     it('customer 2 sees an empty history (does not see customer 1 bookings)', async () => {
       const res = await request(app)
         .get('/api/v1/bookings')

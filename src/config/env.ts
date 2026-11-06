@@ -108,6 +108,7 @@ const envSchema = z.object({
   FILES_DRIVER: z.enum(['local', 'http']).default('local'),
   FILES_ROOT: z.string().default('./uploads'),
   FILES_PUBLIC_BASE_URL: z.string().default('http://localhost:3000/files'),
+  FILES_BUCKET_URL: z.string().optional(),
   FILES_SERVER_URL: z.string().optional(),
   FILES_TOKEN: z.string().optional(),
   PRIVATE_FILES_DIR: z.string().default('./private-uploads'),

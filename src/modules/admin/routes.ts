@@ -18,6 +18,7 @@ import { bookingService } from '../bookings/service.js';
 import { settingsService } from '../settings/service.js';
 import { adminAuthRouter } from './auth.js';
 import { fileStorage } from '../files/storage.js';
+import { publicFileUrl, resolveCoverImageUrl } from '../files/public-url.js';
 import { generateQuoteCode } from '../../lib/ids.js';
 import crypto from 'node:crypto';
 import { getSharp } from '../../lib/sharp-lazy.js';
@@ -920,9 +921,7 @@ function normalizeHotelInput(body: any) {
   }
 
   if (data.coverImageKey && !data.coverImageUrl) {
-    data.coverImageUrl = data.coverImageKey.startsWith('http://') || data.coverImageKey.startsWith('https://')
-      ? data.coverImageKey
-      : `${env.FILES_PUBLIC_BASE_URL}/${data.coverImageKey.replace(/^private\//, 'public/')}`;
+    data.coverImageUrl = publicFileUrl(data.coverImageKey);
   }
 
   return data;
@@ -936,17 +935,15 @@ function formatHotelResponse(hotel: any) {
   const images = Array.isArray(hotel.images)
     ? hotel.images.map((img: any) => ({
         ...img,
-        url: img.url || `${env.FILES_PUBLIC_BASE_URL}/${img.key.replace(/^private\//, 'public/')}`,
+        url: publicFileUrl(img.key),
         sort_order: img.sortOrder ?? img.sort_order ?? 0,
         sortOrder: img.sortOrder ?? img.sort_order ?? 0,
       }))
     : hotel.images;
 
-  if (!coverImageUrl && coverImageKey) {
-    coverImageUrl = coverImageKey.startsWith('http://') || coverImageKey.startsWith('https://')
-      ? coverImageKey
-      : `${env.FILES_PUBLIC_BASE_URL}/${coverImageKey.replace(/^private\//, 'public/')}`;
-  } else if (!coverImageUrl && images && images.length > 0) {
+  coverImageUrl = resolveCoverImageUrl(coverImageKey, coverImageUrl);
+
+  if (!coverImageUrl && images && images.length > 0) {
     const sorted = [...images].sort((a: any, b: any) => {
       const aPub = a.status === 'published';
       const bPub = b.status === 'published';
@@ -957,7 +954,7 @@ function formatHotelResponse(hotel: any) {
     const first = sorted[0];
     if (first) {
       coverImageKey = coverImageKey || first.key;
-      coverImageUrl = first.url || `${env.FILES_PUBLIC_BASE_URL}/${first.key.replace(/^private\//, 'public/')}`;
+      coverImageUrl = first.url || publicFileUrl(first.key);
     }
   }
 
@@ -1447,13 +1444,13 @@ adminRouter.post(
           where: { id: hotelId },
           data: {
             coverImageKey: key,
-            coverImageUrl: `${env.FILES_PUBLIC_BASE_URL}/${key.replace(/^private\//, 'public/')}`,
+            coverImageUrl: publicFileUrl(key),
           },
         });
       }
 
       await ratesService.bumpCatalogCache();
-      res.status(201).json({ data: image });
+      res.status(201).json({ data: { ...image, url: publicFileUrl(image.key) } });
     } catch (err) {
       next(err);
     }
@@ -1498,13 +1495,13 @@ adminRouter.patch('/images/:id', requireRole('admin'), async (req, res, next) =>
         where: { id: image.hotelId },
         data: {
           coverImageKey: newKey,
-          coverImageUrl: `${env.FILES_PUBLIC_BASE_URL}/${newKey.replace(/^private\//, 'public/')}`,
+          coverImageUrl: publicFileUrl(newKey),
         },
       });
     }
 
     await ratesService.bumpCatalogCache();
-    res.json({ data: updated });
+    res.json({ data: { ...updated, url: publicFileUrl(updated.key) } });
   } catch (err) {
     next(err);
   }
@@ -1529,9 +1526,7 @@ adminRouter.delete('/images/:id', requireRole('admin'), async (req, res, next) =
         where: { id: image.hotelId },
         data: {
           coverImageKey: nextImg ? nextImg.key : null,
-          coverImageUrl: nextImg
-            ? `${env.FILES_PUBLIC_BASE_URL}/${nextImg.key.replace(/^private\//, 'public/')}`
-            : null,
+          coverImageUrl: nextImg ? publicFileUrl(nextImg.key) : null,
         },
       });
     }

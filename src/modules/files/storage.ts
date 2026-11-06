@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { env } from '../../config/env.js';
+import { publicFileUrl } from './public-url.js';
 
 export interface FileStorage {
   put(key: string, data: Buffer, opts: { contentType: string }): Promise<void>;
@@ -10,7 +11,7 @@ export interface FileStorage {
 }
 
 export class LocalDiskStorage implements FileStorage {
-  constructor(private rootDir: string, private publicBaseUrl: string) {}
+  constructor(private rootDir: string) {}
 
   private resolvePath(key: string): string {
     return path.join(this.rootDir, key);
@@ -39,15 +40,14 @@ export class LocalDiskStorage implements FileStorage {
   }
 
   url(key: string): string {
-    return `${this.publicBaseUrl}/${key.replace(/^\/+/, '')}`;
+    return publicFileUrl(key);
   }
 }
 
 export class HttpFileServerStorage implements FileStorage {
   constructor(
     private serverUrl: string,
-    private token: string,
-    private publicBaseUrl: string
+    private token: string
   ) {}
 
   async put(key: string, data: Buffer, opts: { contentType: string }): Promise<void> {
@@ -91,19 +91,15 @@ export class HttpFileServerStorage implements FileStorage {
   }
 
   url(key: string): string {
-    return `${this.publicBaseUrl}/${key.replace(/^\/+/, '')}`;
+    return publicFileUrl(key);
   }
 }
 
 export function createStorage(): FileStorage {
   if (env.FILES_DRIVER === 'http' && env.FILES_SERVER_URL && env.FILES_TOKEN) {
-    return new HttpFileServerStorage(
-      env.FILES_SERVER_URL,
-      env.FILES_TOKEN,
-      env.FILES_PUBLIC_BASE_URL
-    );
+    return new HttpFileServerStorage(env.FILES_SERVER_URL, env.FILES_TOKEN);
   }
-  return new LocalDiskStorage(env.FILES_ROOT, env.FILES_PUBLIC_BASE_URL);
+  return new LocalDiskStorage(env.FILES_ROOT);
 }
 
 export const fileStorage = createStorage();

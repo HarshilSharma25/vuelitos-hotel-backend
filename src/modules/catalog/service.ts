@@ -1,5 +1,6 @@
 import { prisma } from '../../lib/prisma.js';
 import { env } from '../../config/env.js';
+import { publicFileUrl, resolveCoverImageUrl } from '../files/public-url.js';
 import { ratesService } from '../rates/service.js';
 import { settingsService } from '../settings/service.js';
 import {
@@ -215,16 +216,8 @@ export class CatalogService {
       }
 
       const firstImage = h.images[0];
-      const fallbackImageUrl = firstImage
-        ? `${env.FILES_PUBLIC_BASE_URL}/${firstImage.key.replace(/^private\//, 'public/')}`
-        : null;
-      let resolvedCoverUrl = h.coverImageUrl;
-      if (!resolvedCoverUrl && h.coverImageKey) {
-        resolvedCoverUrl = h.coverImageKey.startsWith('http://') || h.coverImageKey.startsWith('https://')
-          ? h.coverImageKey
-          : `${env.FILES_PUBLIC_BASE_URL}/${h.coverImageKey.replace(/^private\//, 'public/')}`;
-      }
-      const imageUrl = resolvedCoverUrl || fallbackImageUrl;
+      const fallbackImageUrl = firstImage ? publicFileUrl(firstImage.key) : null;
+      const imageUrl = resolveCoverImageUrl(h.coverImageKey, h.coverImageUrl) || fallbackImageUrl;
 
       const pureSeasons: SeasonInput[] = h.seasons.map((s) => ({
         id: s.id,
@@ -666,16 +659,8 @@ export class CatalogService {
     };
 
     const firstImage = hotel.images[0];
-    const fallbackCoverUrl = firstImage
-      ? `${env.FILES_PUBLIC_BASE_URL}/${firstImage.key.replace(/^private\//, 'public/')}`
-      : null;
-    let coverUrl = hotel.coverImageUrl;
-    if (!coverUrl && hotel.coverImageKey) {
-      coverUrl = hotel.coverImageKey.startsWith('http://') || hotel.coverImageKey.startsWith('https://')
-        ? hotel.coverImageKey
-        : `${env.FILES_PUBLIC_BASE_URL}/${hotel.coverImageKey.replace(/^private\//, 'public/')}`;
-    }
-    coverUrl = coverUrl || fallbackCoverUrl;
+    const fallbackCoverUrl = firstImage ? publicFileUrl(firstImage.key) : null;
+    const coverUrl = resolveCoverImageUrl(hotel.coverImageKey, hotel.coverImageUrl) || fallbackCoverUrl;
 
     const effectiveSettings = await settingsService.getEffectiveCheckoutSettings(hotel.id);
     const cardAvailable = await settingsService.isStripeCardAvailable(hotel.id);
@@ -716,7 +701,7 @@ export class CatalogService {
         images: hotel.images.map((img) => ({
           id: img.id,
           key: img.key,
-          url: `${env.FILES_PUBLIC_BASE_URL}/${img.key.replace(/^private\//, 'public/')}`,
+          url: publicFileUrl(img.key),
           alt: img.alt,
           sort_order: img.sortOrder,
           sortOrder: img.sortOrder,

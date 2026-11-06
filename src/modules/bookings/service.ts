@@ -3,6 +3,7 @@ import { prisma } from '../../lib/prisma.js';
 import { redis } from '../../lib/redis.js';
 import { logger } from '../../lib/logger.js';
 import { env } from '../../config/env.js';
+import { resolveCoverImageUrl } from '../files/public-url.js';
 import { ratesService } from '../rates/service.js';
 import { settingsService } from '../settings/service.js';
 import { notifier } from '../notifications/notifier.js';
@@ -879,7 +880,7 @@ export class BookingService {
     const hotelIds = [...new Set(page.flatMap((b) => b.items.map((i) => i.hotelId)))];
     const hotels = await prisma.hotel.findMany({
       where: { id: { in: hotelIds } },
-      select: { id: true, name: true, destination: true, coverImageUrl: true },
+      select: { id: true, name: true, destination: true, coverImageUrl: true, coverImageKey: true },
     });
     const hotelMap = new Map(hotels.map((h) => [h.id, h]));
 
@@ -919,7 +920,9 @@ export class BookingService {
           payment_status: derivePaymentStatus({ status: b.status, paymentMode: b.paymentMode }),
           refund_status: deriveRefundStatus(b.refundRequests[0]),
           hotel_name: hotel?.name ?? '',
-          hotel_cover_image: hotel?.coverImageUrl ?? null,
+          hotel_cover_image: hotel
+            ? resolveCoverImageUrl(hotel.coverImageKey, hotel.coverImageUrl)
+            : null,
           city: hotel?.destination ?? '',
           check_in: item?.checkIn.toISOString().slice(0, 10) ?? null,
           check_out: item?.checkOut.toISOString().slice(0, 10) ?? null,

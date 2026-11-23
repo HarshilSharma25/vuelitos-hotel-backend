@@ -1,9 +1,7 @@
 name: Deploy Hotel Backend
 
 on:
-  workflow_run:
-    workflows: [Hotel Backend CI]
-    types: [completed]
+  push:
     branches: [master, main, dev, uat]
   workflow_dispatch:
     inputs:
@@ -21,7 +19,7 @@ on:
         type: string
 
 concurrency:
-  group: hotel-backend-deploy-${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
+  group: hotel-backend-deploy-${{ github.ref_name }}
   cancel-in-progress: false
 
 jobs:
@@ -29,10 +27,8 @@ jobs:
     runs-on: ubuntu-latest
     if: >
       (
-        github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        (github.event.workflow_run.head_branch == 'master' || github.event.workflow_run.head_branch == 'main')
+        github.event_name == 'push' &&
+        (github.ref_name == 'master' || github.ref_name == 'main')
       ) ||
       (
         github.event_name == 'workflow_dispatch' &&
@@ -51,7 +47,7 @@ jobs:
             echo "🚀 Deploying Hotel PROD..."
             cd /root/hotel-server
             git fetch origin
-            git reset --hard origin/${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || (inputs.git_branch || github.ref_name) }}
+            git reset --hard origin/${{ github.event_name == 'push' && github.ref_name || (inputs.git_branch || github.ref_name) }}
             npm install
             npx prisma generate
             mv .env .enve
@@ -67,10 +63,8 @@ jobs:
     runs-on: ubuntu-latest
     if: >
       (
-        github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        github.event.workflow_run.head_branch == 'dev'
+        github.event_name == 'push' &&
+        github.ref_name == 'dev'
       ) ||
       (
         github.event_name == 'workflow_dispatch' &&
@@ -89,7 +83,7 @@ jobs:
             echo "🧪 Deploying Hotel DEV..."
             cd /root/hotel-dev
             git fetch origin
-            git reset --hard origin/${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || (inputs.git_branch || 'dev') }}
+            git reset --hard origin/${{ github.event_name == 'push' && github.ref_name || (inputs.git_branch || 'dev') }}
             npm install
             npx prisma generate
             mv .env .enve
@@ -105,10 +99,8 @@ jobs:
     runs-on: ubuntu-latest
     if: >
       (
-        github.event_name == 'workflow_run' &&
-        github.event.workflow_run.conclusion == 'success' &&
-        github.event.workflow_run.event == 'push' &&
-        github.event.workflow_run.head_branch == 'uat'
+        github.event_name == 'push' &&
+        github.ref_name == 'uat'
       ) ||
       (
         github.event_name == 'workflow_dispatch' &&
@@ -127,7 +119,7 @@ jobs:
             echo "🧪 Deploying Hotel UAT..."
             cd /root/hotel-server
             git fetch origin
-            git reset --hard origin/${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || (inputs.git_branch || 'uat') }}
+            git reset --hard origin/${{ github.event_name == 'push' && github.ref_name || (inputs.git_branch || 'uat') }}
             npm install
             npx prisma generate
             mv .env .enve

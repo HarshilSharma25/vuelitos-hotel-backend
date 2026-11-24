@@ -11,6 +11,9 @@ export const destinationItemSchema = z.object({
   slug: z.string(),
   name: z.string(),
   hotel_count: z.number(),
+  starting_price: z.number().nullable(),
+  starting_currency: z.enum(['USD', 'EUR']).nullable(),
+  image: z.string().nullable(),
 });
 
 export const destinationsResponseSchema = z.object({

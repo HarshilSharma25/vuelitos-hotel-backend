@@ -210,7 +210,7 @@ describe('End-to-End API Routes Integration', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.priced).toBe(true);
-    expect(res.body.data.total.base).toBe(200); // 2 nights * $100
+    expect(res.body.data.total.base).toBe(220); // 2 nights * $100 plus the hotel's 10% commission
   });
 
   it('POST /api/v1/bookings creates a booking and returns access token', async () => {

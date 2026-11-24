@@ -82,6 +82,33 @@ describe('Golden Pricing Test Suite', () => {
     ],
   };
 
+  it('charges the full room rate when one adult stays in a double', () => {
+    const result = priceStay({
+      checkIn: '2026-11-05',
+      checkOut: '2026-11-08', // 3 nights
+      mealPlan: 'desayuno',
+      roomSelections: [
+        {
+          roomTypeId: 'rt_standard',
+          adults: 1,
+          children: 0,
+          childAges: [],
+        },
+      ],
+      baseCurrency: 'USD',
+      isSoloDivisas: false,
+      seasons: [standardSeason],
+      paymentRules: mockPaymentRules,
+      fx: mockFx,
+      bookingDate: '2026-10-29',
+    });
+
+    expect(result.priced).toBe(true);
+    if (!result.priced) return;
+    // Tightest per-room band is occupancy 2 at $120, charged once per night.
+    expect(result.total.base).toBe(360.0);
+  });
+
   it('prices 3 nights double occupancy with frozen exact figures', () => {
     const result = priceStay({
       checkIn: '2026-11-05',

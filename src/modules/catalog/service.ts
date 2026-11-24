@@ -13,7 +13,11 @@ import {
   RateInput,
   SeasonInput,
   FxRates,
+  rateCoversGuests,
+  occupancyFitRank,
+  guestNetRate,
 } from '../pricing/index.js';
+import { hotelMatchesMealPlans, hotelMatchesStayType, parseMealPlanFilters } from './stay-filters.js';
 import { getCaracasWallDate } from '../../lib/caracas-time.js';
 import { asNumberArray } from '../../lib/json.js';
 import {
@@ -38,12 +42,47 @@ export interface CatalogSearchParams {
   meal_plan?: string;
   max_price?: number;
   category?: string;
+  currency?: 'USD' | 'EUR';
+  meal_plans?: string | string[];
   q?: string;
   amenities?: string;
   pets_allowed?: string | boolean;
   sort?: 'price_asc' | 'price_desc' | 'stars_desc';
   cursor?: string;
   limit?: number;
+}
+
+function pricedNetRate(
+  netRate: { toString(): string },
+  markupPercent: { toString(): string } | null | undefined,
+  hotelCommission: { toString(): string } | null | undefined
+): string {
+  return guestNetRate(
+    netRate.toString(),
+    markupPercent == null ? null : markupPercent.toString(),
+    hotelCommission == null ? null : hotelCommission.toString()
+  );
+}
+
+function isBetterGuestRate(
+  candidate: RateInput,
+  current: RateInput,
+  guests: number,
+  candidateAmount: Rational,
+  currentAmount: Rational
+): boolean {
+  const rankDiff = occupancyFitRank(candidate, guests) - occupancyFitRank(current, guests);
+  if (rankDiff !== 0) return rankDiff > 0;
+  if (
+    candidate.pricingUnit === 'per_room' &&
+    current.pricingUnit === 'per_room' &&
+    candidate.occupancy !== null &&
+    current.occupancy !== null &&
+    candidate.occupancy !== current.occupancy
+  ) {
+    return candidate.occupancy < current.occupancy;
+  }
+  return candidateAmount.cmp(currentAmount) < 0;
 }
 
 export function calculateUndatedDesde(
@@ -73,6 +112,7 @@ export function calculateUndatedDesde(
       let canPriceAll = true;
 
       for (const guestsInRoom of split) {
+        let bestRateForGuest: RateInput | null = null;
         let bestRateForGuestRat: Rational | null = null;
 
         for (const s of pureSeasons) {
@@ -80,14 +120,19 @@ export function calculateUndatedDesde(
           for (const r of s.rates) {
             if (!r.isActive || r.roomTypeId !== room.id || r.mealPlan !== mp || r.priceKind !== 'IMPORTE') continue;
             if (r.concept !== 'OCUPACION' && r.concept !== null) continue;
-            if (r.occupancy !== null && r.occupancy !== guestsInRoom) continue;
+            if (!rateCoversGuests(r, guestsInRoom)) continue;
             if (r.minNights > 1) continue;
 
             const rateRat = Rational.from(r.netRate);
             const mult = r.pricingUnit === 'per_room' ? 1n : BigInt(guestsInRoom);
             const rateBaseRat = rateRat.mul(mult);
 
-            if (bestRateForGuestRat === null || rateBaseRat.cmp(bestRateForGuestRat) < 0) {
+            if (
+              bestRateForGuest === null ||
+              bestRateForGuestRat === null ||
+              isBetterGuestRate(r, bestRateForGuest, guestsInRoom, rateBaseRat, bestRateForGuestRat)
+            ) {
+              bestRateForGuest = r;
               bestRateForGuestRat = rateBaseRat;
             }
           }
@@ -119,27 +164,115 @@ export function calculateUndatedDesde(
 
 export class CatalogService {
   async getDestinations() {
+    const fx = await ratesService.getLatestEffectiveRates();
     const hotels = await prisma.hotel.findMany({
       where: { isActive: true },
-      select: { destination: true },
+      include: {
+        rooms: { where: { isActive: true } },
+        seasons: {
+          where: { isActive: true },
+          include: { rates: { where: { isActive: true } } },
+        },
+        images: { where: { status: 'published' }, orderBy: { sortOrder: 'asc' }, take: 1 },
+      },
     });
 
-    const destMap = new Map<string, { slug: string; name: string; hotel_count: number }>();
+    const destMap = new Map<
+      string,
+      {
+        slug: string;
+        name: string;
+        hotel_count: number;
+        starting_price: number | null;
+        starting_currency: 'USD' | 'EUR' | null;
+        image: string | null;
+        bestUsdt: number;
+      }
+    >();
+
     for (const h of hotels) {
       const slug = h.destination.toLowerCase().replace(/\s+/g, '-');
-      const existing = destMap.get(slug);
-      if (existing) {
-        existing.hotel_count++;
-      } else {
-        destMap.set(slug, {
+      const firstImage = h.images[0];
+      const image =
+        resolveCoverImageUrl(h.coverImageKey, h.coverImageUrl) ||
+        (firstImage ? publicFileUrl(firstImage.key) : null);
+
+      const mealPlans = Array.from(new Set(h.seasons.flatMap((s) => s.rates.map((r) => r.mealPlan))));
+      const pureSeasons: SeasonInput[] = h.seasons.map((s) => ({
+        id: s.id,
+        hotelId: s.hotelId,
+        name: s.name,
+        priority: s.priority,
+        dateFrom: s.dateFrom.toISOString().slice(0, 10),
+        dateTo: s.dateTo.toISOString().slice(0, 10),
+        bookingFrom: s.bookingFrom ? s.bookingFrom.toISOString().slice(0, 10) : null,
+        bookingTo: s.bookingTo ? s.bookingTo.toISOString().slice(0, 10) : null,
+        isActive: s.isActive,
+        rates: s.rates.map((r) => ({
+          id: r.id,
+          roomTypeId: r.roomTypeId,
+          seasonId: r.seasonId,
+          mealPlan: r.mealPlan,
+          concept: r.concept as any,
+          priceKind: r.priceKind as any,
+          occupancy: r.occupancy,
+          pricingUnit: r.pricingUnit as any,
+          netRate: pricedNetRate(r.netRate, r.markupPercent, h.defaultCommissionPercent),
+          daysOfWeek: asNumberArray(r.daysOfWeek),
+          minNights: r.minNights,
+          maxNights: r.maxNights,
+          isActive: r.isActive,
+        })),
+      }));
+
+      const undated =
+        h.rooms.length > 0 && mealPlans.length > 0
+          ? calculateUndatedDesde(
+              h.rooms,
+              pureSeasons,
+              mealPlans,
+              undefined,
+              1,
+              2,
+              h.baseCurrency as any,
+              h.isSoloDivisas,
+              fx
+            )
+          : { price: null, availability: 'no_rate' as const };
+
+      let dest = destMap.get(slug);
+      if (!dest) {
+        dest = {
           slug,
           name: h.destination,
-          hotel_count: 1,
-        });
+          hotel_count: 0,
+          starting_price: null,
+          starting_currency: null,
+          image,
+          bestUsdt: Infinity,
+        };
+        destMap.set(slug, dest);
+      }
+      dest.hotel_count++;
+      if (!dest.image && image) dest.image = image;
+
+      const price = undated.price;
+      if (
+        price &&
+        (price.usdt < dest.bestUsdt ||
+          (price.usdt === dest.bestUsdt &&
+            (dest.starting_price == null || price.base < dest.starting_price)))
+      ) {
+        dest.bestUsdt = price.usdt;
+        dest.starting_price = price.base;
+        dest.starting_currency = h.baseCurrency === 'EUR' ? 'EUR' : 'USD';
+        if (image) dest.image = image;
       }
     }
 
-    return { destinations: Array.from(destMap.values()) };
+    return {
+      destinations: Array.from(destMap.values()).map(({ bestUsdt: _bestUsdt, ...dest }) => dest),
+    };
   }
 
   async searchHotels(params: CatalogSearchParams) {
@@ -164,8 +297,8 @@ export class CatalogService {
         contains: params.destination.replace(/-/g, ' '),
       };
     }
-    if (params.category) {
-      whereClause.category = { equals: params.category };
+    if (params.currency === 'USD' || params.currency === 'EUR') {
+      whereClause.baseCurrency = params.currency;
     }
     if (params.q) {
       whereClause.name = { contains: params.q };
@@ -207,11 +340,16 @@ export class CatalogService {
       const maxOcc = Math.max(...h.rooms.map((r) => r.maxOccupancy), 1);
       const roomsQuoted = effectiveRooms(rooms, totalGuests, maxOcc);
 
+      if (!hotelMatchesStayType(h.category, params.category)) {
+        continue;
+      }
+
       const mealPlansSet = new Set<string>();
       h.seasons.forEach((s) => s.rates.forEach((r) => mealPlansSet.add(r.mealPlan)));
       const mealPlans = Array.from(mealPlansSet);
+      const selectedMealPlans = parseMealPlanFilters(params.meal_plan, params.meal_plans);
 
-      if (params.meal_plan && !mealPlans.includes(params.meal_plan)) {
+      if (!hotelMatchesMealPlans(mealPlans, selectedMealPlans)) {
         continue;
       }
 
@@ -238,7 +376,7 @@ export class CatalogService {
           priceKind: r.priceKind as any,
           occupancy: r.occupancy,
           pricingUnit: r.pricingUnit as any,
-          netRate: r.netRate.toString(),
+          netRate: pricedNetRate(r.netRate, r.markupPercent, h.defaultCommissionPercent),
           daysOfWeek: asNumberArray(r.daysOfWeek),
           minNights: r.minNights,
           maxNights: r.maxNights,
@@ -497,13 +635,13 @@ export class CatalogService {
         concept: r.concept as any,
         priceKind: r.priceKind as any,
         occupancy: r.occupancy,
-        pricingUnit: r.pricingUnit as any,
-        netRate: r.netRate.toString(),
-        daysOfWeek: asNumberArray(r.daysOfWeek),
-        minNights: r.minNights,
-        maxNights: r.maxNights,
-        isActive: r.isActive,
-      })),
+          pricingUnit: r.pricingUnit as any,
+          netRate: pricedNetRate(r.netRate, r.markupPercent, hotel.defaultCommissionPercent),
+          daysOfWeek: asNumberArray(r.daysOfWeek),
+          minNights: r.minNights,
+          maxNights: r.maxNights,
+          isActive: r.isActive,
+        })),
     }));
 
     const purePaymentRules = hotel.paymentRules.map((pr) => ({
@@ -524,7 +662,7 @@ export class CatalogService {
         .filter((r) => r.priceKind === 'IMPORTE')
         .map((r) => {
           const money = calculateMoneyFromBase(
-            Rational.from(r.netRate.toString()),
+            Rational.from(pricedNetRate(r.netRate, r.markupPercent, hotel.defaultCommissionPercent)),
             hotel.baseCurrency as any,
             hotel.isSoloDivisas,
             fx as any
@@ -796,7 +934,7 @@ export class CatalogService {
         priceKind: r.priceKind as any,
         occupancy: r.occupancy,
         pricingUnit: r.pricingUnit as any,
-        netRate: r.netRate.toString(),
+        netRate: pricedNetRate(r.netRate, r.markupPercent, hotel.defaultCommissionPercent),
         daysOfWeek: asNumberArray(r.daysOfWeek),
         minNights: r.minNights,
         maxNights: r.maxNights,

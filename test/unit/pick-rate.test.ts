@@ -21,6 +21,23 @@ describe('pickRate Pure Function', () => {
 
   const night = new Date('2026-11-01T00:00:00Z'); // Sunday (UTCDay 0)
 
+  it('charges the full per-room rate when one guest uses a double occupancy rate', () => {
+    const res = pickRate([baseRate], night, 1, 2);
+    expect('rate' in res && res.rate.id).toBe('rate-1');
+  });
+
+  it('prefers an exact single rate over a larger per-room band', () => {
+    const single = { ...baseRate, id: 'single', occupancy: 1, netRate: 90 };
+    const res = pickRate([baseRate, single], night, 1, 2);
+    expect('rate' in res && res.rate.id).toBe('single');
+  });
+
+  it('does not apply a per-person double rate to one guest', () => {
+    const perPerson = { ...baseRate, pricingUnit: 'per_person' as const };
+    const res = pickRate([perPerson], night, 1, 2);
+    expect('error' in res && res.error).toBe('no_rate');
+  });
+
   it('selects valid rate matching guests and nights', () => {
     const res = pickRate([baseRate], night, 2, 2);
     expect('rate' in res).toBe(true);

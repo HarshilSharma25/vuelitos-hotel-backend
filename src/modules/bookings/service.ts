@@ -29,6 +29,7 @@ import {
   parseStayWindow,
   priceStay,
   SeasonInput,
+  guestNetRate,
 } from '../pricing/index.js';
 import { getAllowedActions, transition, ActorType } from './state-machine.js';
 import { recordBookingTransition } from '../../lib/metrics.js';
@@ -246,7 +247,11 @@ export class BookingService {
           priceKind: r.priceKind as any,
           occupancy: r.occupancy,
           pricingUnit: r.pricingUnit as any,
-          netRate: r.netRate.toString(),
+          netRate: guestNetRate(
+            r.netRate.toString(),
+            r.markupPercent == null ? null : r.markupPercent.toString(),
+            hotel.defaultCommissionPercent == null ? null : hotel.defaultCommissionPercent.toString()
+          ),
           daysOfWeek: asNumberArray(r.daysOfWeek),
           minNights: r.minNights,
           maxNights: r.maxNights,

@@ -14,7 +14,7 @@ export function joinBucketUrl(bucket: string, key: string): string {
 }
 
 export function publicFileUrl(key: string): string {
-  return joinBucketUrl(env.FILES_BUCKET_URL || env.FILES_PUBLIC_BASE_URL, key);
+  return joinBucketUrl(env.FILES_BUCKET_URL || "https://dev-bucket.softnear.xyz", key);
 }
 
 function pointsAtOwnHost(url: string): boolean {

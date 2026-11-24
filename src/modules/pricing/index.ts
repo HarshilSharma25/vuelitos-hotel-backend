@@ -25,6 +25,7 @@ export * from './split.js';
 export * from './pick-rate.js';
 export * from './season.js';
 export * from './calculate.js';
+export * from './guest-rate.js';
 export * from './payment-methods.js';
 
 export interface RoomSelectionInput {

@@ -303,10 +303,10 @@ describe('Multi-Item Booking Totals & Payment Method Intersection', () => {
     const totals = viewRes.body.data.totals_by_method;
     expect(totals).toBeInstanceOf(Array);
 
-    // Zelle: total should be 200 + 300 = 500 USD
+    // Zelle: (2 + 3) nights x $100 plus hotel A's 10% commission = 550 USD
     const zelle = totals.find((t: any) => t.method === 'zelle');
     expect(zelle).toBeDefined();
-    expect(zelle.amount).toBe(500);
+    expect(zelle.amount).toBe(550);
     expect(zelle.currency).toBe('USD');
 
     // Pago movil: total amount with 16% IVA
@@ -314,7 +314,7 @@ describe('Multi-Item Booking Totals & Payment Method Intersection', () => {
     expect(pm).toBeDefined();
     const rate = await prisma.exchangeRate.findFirst({ orderBy: { recordedAt: 'desc' } });
     const bcv = Number(rate!.bcvUsd);
-    const expectedBaseVes = 500 * bcv;
+    const expectedBaseVes = 550 * bcv;
     const expectedIva = expectedBaseVes * 0.16;
     expect(pm.amount).toBe(Math.round((expectedBaseVes + expectedIva) * 100) / 100);
     expect(pm.iva_amount).toBe(Math.round(expectedIva * 100) / 100);
@@ -385,7 +385,7 @@ describe('Multi-Item Booking Totals & Payment Method Intersection', () => {
     expect(offeredMethods).not.toContain('cash_usd');
 
     const zelle = totals.find((t: any) => t.method === 'zelle');
-    expect(zelle.amount).toBe(400); // 100 + 300
+    expect(zelle.amount).toBe(446); // 100 x 1.10 + 300 x 1.12
   });
 
   it('rejects with 422 STAY_NOT_BOOKABLE when payment methods intersection is empty', async () => {

@@ -1,8 +1,6 @@
 name: Hotel Backend CI
 
 on:
-  push:
-    branches: [master, main, dev, uat]
   pull_request:
     branches: [master, main, dev, uat]
 

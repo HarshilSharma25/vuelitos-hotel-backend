@@ -42,7 +42,9 @@ jobs:
         env:
           MYSQL_ROOT_PASSWORD: hotel_password
           MYSQL_ROOT_HOST: "%"
-          MYSQL_DATABASE: hotel_backend
+          MYSQL_DATABASE: hotels
+          MYSQL_USER: flightDev
+          MYSQL_PASSWORD: "FlightDevUser&123"
         ports:
           - 3306:3306
         options: >-
@@ -62,6 +64,7 @@ jobs:
           --health-retries 5
 
     env:
+      # %26 is "&". A raw "&" in DATABASE_URL is parsed as a query separator.
       DATABASE_URL: mysql://flightDev:FlightDevUser%26123@127.0.0.1:3306/hotels
       REDIS_URL: redis://localhost:6379
       SESSION_SECRET: ci-test-session-secret-must-be-at-least-32-chars!

@@ -441,6 +441,10 @@ export class CatalogService {
           }
         }
 
+        if (bestAvailability !== 'ok') {
+          continue;
+        }
+
         if (params.max_price && bestOptionPrice && bestOptionPrice.usdt > params.max_price) {
           continue;
         }
@@ -654,7 +658,22 @@ export class CatalogService {
     hotel.seasons.forEach((s) => s.rates.forEach((r) => mealPlansSet.add(r.mealPlan)));
     const mealPlans = Array.from(mealPlansSet);
 
-    const seasonalRates = hotel.seasons.map((s) => ({
+    const stayNights =
+      params.check_in && params.check_out
+        ? parseStayWindow(params.check_in, params.check_out)
+        : null;
+
+    const seasonsForDisplay = stayNights
+      ? hotel.seasons.filter((s) => {
+          const from = s.dateFrom.toISOString().slice(0, 10);
+          const to = s.dateTo.toISOString().slice(0, 10);
+          const firstNight = stayNights.dateStrings[0];
+          const lastNight = stayNights.dateStrings[stayNights.dateStrings.length - 1];
+          return from <= lastNight && firstNight <= to;
+        })
+      : hotel.seasons;
+
+    const seasonalRates = seasonsForDisplay.map((s) => ({
       season: s.name,
       date_from: s.dateFrom.toISOString().slice(0, 10),
       date_to: s.dateTo.toISOString().slice(0, 10),
@@ -711,15 +730,6 @@ export class CatalogService {
           const optionId = `${room.id}_${mp}`;
 
           if (!fitsParty) {
-            stayOptions.push({
-              id: optionId,
-              room_type_id: room.id,
-              room_name: room.name,
-              meal_plan: mp,
-              fits_party: false,
-              priced: false,
-              reason: 'no_rate',
-            });
             continue;
           }
 
@@ -759,7 +769,7 @@ export class CatalogService {
               lowestUsdt = priced.total.usdt;
               lowestOptionId = optionId;
             }
-          } else {
+          } else if (priced.reason === 'min_nights') {
             stayOptions.push({
               id: optionId,
               room_type_id: room.id,
@@ -849,7 +859,12 @@ export class CatalogService {
         pets_allowed: acceptsPets,
         petsAllowed: acceptsPets,
       },
-      rooms: hotel.rooms.map((r) => ({
+      rooms: (stayData
+        ? hotel.rooms.filter((r) =>
+            stayData.options.some((opt: { room_type_id: string }) => opt.room_type_id === r.id)
+          )
+        : hotel.rooms
+      ).map((r) => ({
         id: r.id,
         name: r.name,
         max_occupancy: r.maxOccupancy,

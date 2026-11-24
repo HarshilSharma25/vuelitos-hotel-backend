@@ -45,7 +45,7 @@ jobs:
           port: ${{ secrets.SERVER_ACTIVE_PORT }}
           script: |
             echo "🚀 Deploying Hotel PROD..."
-            cd /root/hotel-server
+            cd /root/vuelitos-hotel-backend
             git fetch origin
             git reset --hard origin/${{ github.event_name == 'push' && github.ref_name || (inputs.git_branch || github.ref_name) }}
             npm install

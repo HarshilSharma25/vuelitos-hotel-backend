@@ -87,6 +87,12 @@ jobs:
       - name: Generate Prisma Client
         run: npx prisma generate
 
+      - name: Allow trigger creation in CI MySQL
+        env:
+          DATABASE_URL: mysql://root:hotel_password@127.0.0.1:3306/hotels
+        run: |
+          echo "SET GLOBAL log_bin_trust_function_creators = 1;" | npx prisma db execute --stdin
+
       - name: Deploy Prisma Migrations
         run: npx prisma migrate deploy
 

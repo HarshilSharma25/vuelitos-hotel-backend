@@ -13,7 +13,7 @@ import {
   verifyAccessToken,
 } from '../../lib/ids.js';
 import { calculateSlaDueAt, getCaracasWallDate } from '../../lib/caracas-time.js';
-import { asNumberArray } from '../../lib/json.js';
+import { roomMaxOccupancyMap, toRateInput } from '../pricing/rate-input.js';
 import {
   BadRequestError,
   GroupRequestRequiredError,
@@ -228,6 +228,7 @@ export class BookingService {
         throw new InvalidStayWindowError();
       }
 
+      const roomOcc = roomMaxOccupancyMap(hotel.rooms);
       const pureSeasons: SeasonInput[] = hotel.seasons.map((s) => ({
         id: s.id,
         hotelId: s.hotelId,
@@ -239,23 +240,12 @@ export class BookingService {
         bookingTo: s.bookingTo ? s.bookingTo.toISOString().slice(0, 10) : null,
         isActive: s.isActive,
         rates: s.rates.map((r) => ({
-          id: r.id,
-          roomTypeId: r.roomTypeId,
-          seasonId: r.seasonId,
-          mealPlan: r.mealPlan,
-          concept: r.concept as any,
-          priceKind: r.priceKind as any,
-          occupancy: r.occupancy,
-          pricingUnit: r.pricingUnit as any,
+          ...toRateInput(r, roomOcc.get(r.roomTypeId) ?? 2),
           netRate: guestNetRate(
             r.netRate.toString(),
             r.markupPercent == null ? null : r.markupPercent.toString(),
             hotel.defaultCommissionPercent == null ? null : hotel.defaultCommissionPercent.toString()
           ),
-          daysOfWeek: asNumberArray(r.daysOfWeek),
-          minNights: r.minNights,
-          maxNights: r.maxNights,
-          isActive: r.isActive,
         })),
       }));
 

@@ -41,13 +41,11 @@ describe('Golden Pricing Test Suite', () => {
         mealPlan: 'desayuno',
         concept: 'OCUPACION',
         priceKind: 'IMPORTE',
-        occupancy: 2,
-        pricingUnit: 'per_room',
+                pricingUnit: 'per_room',
         netRate: 120, // $120 / night for the room
-        daysOfWeek: [],
-        minNights: 1,
-        maxNights: null,
-        isActive: true,
+                minNights: 1,
+        maxOccupancy: 4,
+                isActive: true,
       },
       {
         id: 'rate_standard_triple',
@@ -56,13 +54,11 @@ describe('Golden Pricing Test Suite', () => {
         mealPlan: 'desayuno',
         concept: 'OCUPACION',
         priceKind: 'IMPORTE',
-        occupancy: 3,
-        pricingUnit: 'per_room',
+                pricingUnit: 'per_room',
         netRate: 150, // $150 / night
-        daysOfWeek: [],
-        minNights: 1,
-        maxNights: null,
-        isActive: true,
+                minNights: 1,
+        maxOccupancy: 4,
+                isActive: true,
       },
       {
         id: 'rate_min3_nights',
@@ -71,13 +67,11 @@ describe('Golden Pricing Test Suite', () => {
         mealPlan: 'desayuno',
         concept: 'OCUPACION',
         priceKind: 'IMPORTE',
-        occupancy: 4,
-        pricingUnit: 'per_room',
+                pricingUnit: 'per_room',
         netRate: 200,
-        daysOfWeek: [],
-        minNights: 3,
-        maxNights: null,
-        isActive: true,
+                minNights: 3,
+        maxOccupancy: 4,
+                isActive: true,
       },
     ],
   };
@@ -269,13 +263,11 @@ describe('Golden Pricing Test Suite', () => {
           mealPlan: 'desayuno',
           concept: 'OCUPACION',
           priceKind: 'IMPORTE',
-          occupancy: 2,
-          pricingUnit: 'per_room',
+                    pricingUnit: 'per_room',
           netRate: 100, // 100 EUR / night
-          daysOfWeek: [],
-          minNights: 1,
-          maxNights: null,
-          isActive: true,
+                    minNights: 1,
+          maxOccupancy: 2,
+                    isActive: true,
         },
       ],
     };
@@ -344,13 +336,11 @@ describe('Golden Pricing Test Suite', () => {
           mealPlan: 'desayuno',
           concept: 'OCUPACION',
           priceKind: 'IMPORTE',
-          occupancy: null,
-          pricingUnit: 'per_person',
+                    pricingUnit: 'per_person',
           netRate: 50, // $50 / person / night
-          daysOfWeek: [],
-          minNights: 1,
-          maxNights: null,
-          isActive: true,
+                    minNights: 1,
+          maxOccupancy: 3,
+                    isActive: true,
         },
       ],
     };
@@ -383,11 +373,11 @@ describe('Golden Pricing Test Suite', () => {
     expect(result.total.base).toBe(450.0);
   });
 
-  it('tests child pricing bands (flag off matches current, flag on computes child bands)', () => {
+  it('includes children in guest count for room occupancy', () => {
     const childSeason: SeasonInput = {
       id: 'season_child',
       hotelId: 'hotel_child',
-      name: 'Temporada Child Bands',
+      name: 'Temporada Child',
       priority: 1,
       dateFrom: '2026-11-01',
       dateTo: '2026-11-30',
@@ -402,56 +392,18 @@ describe('Golden Pricing Test Suite', () => {
           mealPlan: 'desayuno',
           concept: 'OCUPACION',
           priceKind: 'IMPORTE',
-          occupancy: 2,
           pricingUnit: 'per_room',
-          netRate: 100, // $100 / night for room (2 adults)
-          daysOfWeek: [],
+          netRate: 100,
           minNights: 1,
-          maxNights: null,
-          isActive: true,
-        },
-        {
-          id: 'rate_child_gratis',
-          roomTypeId: 'rt_child',
-          seasonId: 'season_child',
-          mealPlan: 'desayuno',
-          concept: 'NINO',
-          priceKind: 'GRATIS',
-          occupancy: null,
-          pricingUnit: 'per_person',
-          netRate: 0,
-          childAgeMin: 0,
-          childAgeMax: 6,
-          daysOfWeek: [],
-          minNights: 1,
-          maxNights: null,
-          isActive: true,
-        },
-        {
-          id: 'rate_child_percentage',
-          roomTypeId: 'rt_child',
-          seasonId: 'season_child',
-          mealPlan: 'desayuno',
-          concept: 'NINO',
-          priceKind: 'PORCENTAJE_ADULTO',
-          percentOfAdult: 50, // 50% of adult unit
-          occupancy: null,
-          pricingUnit: 'per_person',
-          netRate: 0,
-          childAgeMin: 7,
-          childAgeMax: 12,
-          daysOfWeek: [],
-          minNights: 1,
-          maxNights: null,
+          maxOccupancy: 3,
           isActive: true,
         },
       ],
     };
 
-    // Case 1: Flag off (childBandsEnabled false)
-    const resFlagOff = priceStay({
+    const res = priceStay({
       checkIn: '2026-11-05',
-      checkOut: '2026-11-07', // 2 nights
+      checkOut: '2026-11-07',
       mealPlan: 'desayuno',
       roomSelections: [
         {
@@ -463,68 +415,15 @@ describe('Golden Pricing Test Suite', () => {
       ],
       baseCurrency: 'USD',
       isSoloDivisas: false,
-      childBandsEnabled: false,
       seasons: [childSeason],
       paymentRules: mockPaymentRules,
       fx: mockFx,
       bookingDate: '2026-10-29',
     });
-    // With flag off, 2 adults + 1 child = 3 guests, rate requires occupancy 2 so fails with no_rate
-    expect(resFlagOff.priced).toBe(false);
 
-    // Case 2: Flag on, child age 4 is GRATIS
-    (env as any).PRICING_CHILD_BANDS = true;
-    const resChildFree = priceStay({
-      checkIn: '2026-11-05',
-      checkOut: '2026-11-07', // 2 nights
-      mealPlan: 'desayuno',
-      roomSelections: [
-        {
-          roomTypeId: 'rt_child',
-          adults: 2,
-          children: 1,
-          childAges: [4],
-        },
-      ],
-      baseCurrency: 'USD',
-      isSoloDivisas: false,
-      childBandsEnabled: true,
-      seasons: [childSeason],
-      paymentRules: mockPaymentRules,
-      fx: mockFx,
-      bookingDate: '2026-10-29',
-    });
-    expect(resChildFree.priced).toBe(true);
-    if (resChildFree.priced) {
-      // 2 nights * $100 (room) + $0 (child gratis) = $200
-      expect(resChildFree.total.base).toBe(200.0);
-    }
-
-    // Case 3: Flag on, child age 8 pays 50% of adult unit ($50/night -> $25/night)
-    const resChildHalf = priceStay({
-      checkIn: '2026-11-05',
-      checkOut: '2026-11-07', // 2 nights
-      mealPlan: 'desayuno',
-      roomSelections: [
-        {
-          roomTypeId: 'rt_child',
-          adults: 2,
-          children: 1,
-          childAges: [8],
-        },
-      ],
-      baseCurrency: 'USD',
-      isSoloDivisas: false,
-      childBandsEnabled: true,
-      seasons: [childSeason],
-      paymentRules: mockPaymentRules,
-      fx: mockFx,
-      bookingDate: '2026-10-29',
-    });
-    expect(resChildHalf.priced).toBe(true);
-    if (resChildHalf.priced) {
-      // 2 nights * $100 room + 2 nights * ($100/2 * 50% = $25) child = $200 + $50 = $250
-      expect(resChildHalf.total.base).toBe(250.0);
+    expect(res.priced).toBe(true);
+    if (res.priced) {
+      expect(res.total.base).toBe(200.0);
     }
   });
 });

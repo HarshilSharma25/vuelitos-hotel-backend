@@ -1,6 +1,6 @@
 import { prisma } from '../../lib/prisma.js';
-import { asNumberArray } from '../../lib/json.js';
 import { resolveSingleRoomStay, parseStayWindow, SeasonInput } from '../pricing/index.js';
+import { roomMaxOccupancyMap, toRateInput } from '../pricing/rate-input.js';
 import { ratesService } from '../rates/service.js';
 
 export interface CatalogFix {
@@ -35,6 +35,7 @@ export async function runCatalogFixes(fixes: CatalogFix[]): Promise<{ fixId: str
       const window = parseStayWindow(fix.testCheckIn, fix.testCheckOut);
       if (!window) throw new Error('Invalid stay window in test fix');
 
+      const roomOcc = roomMaxOccupancyMap(hotel.rooms);
       const pureSeasons: SeasonInput[] = hotel.seasons.map((s) => ({
         id: s.id,
         hotelId: s.hotelId,
@@ -46,19 +47,8 @@ export async function runCatalogFixes(fixes: CatalogFix[]): Promise<{ fixId: str
         bookingTo: s.bookingTo ? s.bookingTo.toISOString().slice(0, 10) : null,
         isActive: s.isActive,
         rates: s.rates.map((r) => ({
-          id: r.id,
-          roomTypeId: r.roomTypeId,
-          seasonId: r.seasonId,
-          mealPlan: r.mealPlan,
-          concept: r.concept as any,
-          priceKind: r.priceKind as any,
-          occupancy: r.occupancy,
-          pricingUnit: r.pricingUnit as any,
+          ...toRateInput(r, roomOcc.get(r.roomTypeId) ?? 2),
           netRate: r.netRate.toString(),
-          daysOfWeek: asNumberArray(r.daysOfWeek),
-          minNights: r.minNights,
-          maxNights: r.maxNights,
-          isActive: r.isActive,
         })),
       }));
 
@@ -93,6 +83,7 @@ export async function runCatalogFixes(fixes: CatalogFix[]): Promise<{ fixId: str
         },
       });
 
+      const updatedOcc = roomMaxOccupancyMap(updatedHotel!.rooms);
       const updatedSeasons: SeasonInput[] = updatedHotel!.seasons.map((s) => ({
         id: s.id,
         hotelId: s.hotelId,
@@ -104,19 +95,8 @@ export async function runCatalogFixes(fixes: CatalogFix[]): Promise<{ fixId: str
         bookingTo: s.bookingTo ? s.bookingTo.toISOString().slice(0, 10) : null,
         isActive: s.isActive,
         rates: s.rates.map((r) => ({
-          id: r.id,
-          roomTypeId: r.roomTypeId,
-          seasonId: r.seasonId,
-          mealPlan: r.mealPlan,
-          concept: r.concept as any,
-          priceKind: r.priceKind as any,
-          occupancy: r.occupancy,
-          pricingUnit: r.pricingUnit as any,
+          ...toRateInput(r, updatedOcc.get(r.roomTypeId) ?? 2),
           netRate: r.netRate.toString(),
-          daysOfWeek: asNumberArray(r.daysOfWeek),
-          minNights: r.minNights,
-          maxNights: r.maxNights,
-          isActive: r.isActive,
         })),
       }));
 

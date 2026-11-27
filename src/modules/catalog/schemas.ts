@@ -131,6 +131,19 @@ export const hotelDetailSchema = z.object({
       id: z.string(),
       name: z.string(),
       max_occupancy: z.number(),
+      image: z.string().nullable().optional(),
+      image_url: z.string().nullable().optional(),
+      alt: z.string().nullable().optional(),
+      images: z
+        .array(
+          z.object({
+            id: z.string(),
+            url: z.string(),
+            alt: z.string().nullable().optional(),
+            sort_order: z.number().optional(),
+          })
+        )
+        .optional(),
     })
   ),
   seasonal_rates: z.array(

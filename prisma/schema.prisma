@@ -187,8 +187,23 @@ model RoomType {
   maxOccupancy Int      @map("max_occupancy")
   isActive     Boolean  @default(true) @map("is_active")
   rates        Rate[]
+  images       RoomImage[]
 
   @@map("room_types")
+}
+
+model RoomImage {
+  id                 String   @id @default(uuid())
+  roomTypeId         String   @map("room_type_id")
+  roomType           RoomType @relation(fields: [roomTypeId], references: [id], onDelete: Cascade)
+  key                String   @db.VarChar(512)
+  alt                String?
+  sortOrder          Int      @default(0) @map("sort_order")
+  sourceHotelImageId String?  @map("source_hotel_image_id")
+  createdAt          DateTime @default(now()) @map("created_at")
+
+  @@index([roomTypeId, sortOrder])
+  @@map("room_images")
 }
 
 model Season {
@@ -208,32 +223,22 @@ model Season {
 }
 
 model Rate {
-  id             String       @id @default(uuid())
-  roomTypeId     String       @map("room_type_id")
-  roomType       RoomType     @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
-  seasonId       String       @map("season_id")
-  season         Season       @relation(fields: [seasonId], references: [id], onDelete: Restrict)
-  mealPlan       String       @map("meal_plan")
-  concept        RateConcept?
-  priceKind      PriceKind    @map("price_kind")
-  occupancy      Int?
-  pricingUnit    PricingUnit  @map("pricing_unit")
-  netRate        Decimal      @map("net_rate") @db.Decimal(12, 2)
-  markupPercent  Decimal?     @map("markup_percent") @db.Decimal(5, 2)
-  sellRate       Decimal?     @map("sell_rate") @db.Decimal(12, 2)
-  percentOfAdult Decimal?     @map("percent_of_adult") @db.Decimal(5, 2)
-  childAgeMin    Int?         @map("child_age_min")
-  childAgeMax    Int?         @map("child_age_max")
-  daysOfWeek     Json         @default("[]") @map("days_of_week")
-  // Kept in sync by a BEFORE INSERT/UPDATE trigger. MySQL cannot put JSON in a unique index.
-  daysOfWeekKey  String       @default("[]") @map("days_of_week_key") @db.VarChar(64)
-  minNights      Int          @default(1) @map("min_nights")
-  maxNights      Int?         @map("max_nights")
-  packageNights  Int?         @map("package_nights")
-  sourcePage     Int?         @map("source_page")
-  isActive       Boolean      @default(true) @map("is_active")
+  id            String       @id @default(uuid())
+  roomTypeId    String       @map("room_type_id")
+  roomType      RoomType     @relation(fields: [roomTypeId], references: [id], onDelete: Restrict)
+  seasonId      String       @map("season_id")
+  season        Season       @relation(fields: [seasonId], references: [id], onDelete: Restrict)
+  mealPlan      String       @map("meal_plan")
+  concept       RateConcept?
+  priceKind     PriceKind    @map("price_kind")
+  pricingUnit   PricingUnit  @map("pricing_unit")
+  netRate       Decimal      @map("net_rate") @db.Decimal(12, 2)
+  markupPercent Decimal?     @map("markup_percent") @db.Decimal(5, 2)
+  sellRate      Decimal?     @map("sell_rate") @db.Decimal(12, 2)
+  minNights     Int          @default(1) @map("min_nights")
+  isActive      Boolean      @default(true) @map("is_active")
 
-  @@unique([roomTypeId, seasonId, mealPlan, occupancy, concept, priceKind, daysOfWeekKey, minNights, childAgeMin, childAgeMax, isActive], map: "rates_unica_por_ocupacion")
+  @@unique([roomTypeId, seasonId, mealPlan, concept, priceKind, minNights, isActive], map: "rates_unique_key")
   @@map("rates")
 }
 

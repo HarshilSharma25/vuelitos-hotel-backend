@@ -10,40 +10,30 @@ describe('pickRate Pure Function', () => {
     mealPlan: 'desayuno',
     concept: 'OCUPACION',
     priceKind: 'IMPORTE',
-    occupancy: 2,
     pricingUnit: 'per_room',
     netRate: 100,
-    daysOfWeek: [],
+    maxOccupancy: 2,
     minNights: 1,
-    maxNights: null,
     isActive: true,
   };
 
-  const night = new Date('2026-11-01T00:00:00Z'); // Sunday (UTCDay 0)
+  const night = new Date('2026-11-01T00:00:00Z');
 
-  it('charges the full per-room rate when one guest uses a double occupancy rate', () => {
+  it('applies per-room rate when guests fit the room max occupancy', () => {
     const res = pickRate([baseRate], night, 1, 2);
     expect('rate' in res && res.rate.id).toBe('rate-1');
   });
 
-  it('prefers an exact single rate over a larger per-room band', () => {
-    const single = { ...baseRate, id: 'single', occupancy: 1, netRate: 90 };
-    const res = pickRate([baseRate, single], night, 1, 2);
-    expect('rate' in res && res.rate.id).toBe('single');
-  });
-
-  it('does not apply a per-person double rate to one guest', () => {
-    const perPerson = { ...baseRate, pricingUnit: 'per_person' as const };
-    const res = pickRate([perPerson], night, 1, 2);
+  it('rejects parties above room max occupancy', () => {
+    const smallRoom = { ...baseRate, maxOccupancy: 1 };
+    const res = pickRate([smallRoom], night, 2, 2);
     expect('error' in res && res.error).toBe('no_rate');
   });
 
-  it('selects valid rate matching guests and nights', () => {
-    const res = pickRate([baseRate], night, 2, 2);
+  it('allows per-person pricing when guests fit the room cap', () => {
+    const perPerson = { ...baseRate, pricingUnit: 'per_person' as const };
+    const res = pickRate([perPerson], night, 2, 2);
     expect('rate' in res).toBe(true);
-    if ('rate' in res) {
-      expect(res.rate.id).toBe('rate-1');
-    }
   });
 
   it('returns min_nights error if stay is shorter than required', () => {
@@ -55,22 +45,7 @@ describe('pickRate Pure Function', () => {
     }
   });
 
-  it('honours max_nights restriction (Decision 5 / Q5)', () => {
-    const maxNightsRate = { ...baseRate, maxNights: 3 };
-    // Stay is 4 nights -> cannot use maxNights 3 rate
-    const res = pickRate([maxNightsRate], night, 2, 4);
-    expect('error' in res && res.error).toBe('no_rate');
-  });
-
-  it('prioritizes day-specific rate over general rate', () => {
-    const generalRate = { ...baseRate, id: 'general', netRate: 80, daysOfWeek: [] };
-    const sundayRate = { ...baseRate, id: 'sunday', netRate: 120, daysOfWeek: [0] };
-
-    const res = pickRate([generalRate, sundayRate], night, 2, 2);
-    expect('rate' in res && res.rate.id).toBe('sunday');
-  });
-
-  it('prioritizes longer minNights and then cheaper netRate', () => {
+  it('prefers longer minNights and then cheaper netRate', () => {
     const rate1 = { ...baseRate, id: 'r1', minNights: 1, netRate: 100 };
     const rate2 = { ...baseRate, id: 'r2', minNights: 2, netRate: 90 };
     const rate3 = { ...baseRate, id: 'r3', minNights: 2, netRate: 110 };

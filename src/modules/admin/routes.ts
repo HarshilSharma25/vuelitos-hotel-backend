@@ -22,7 +22,7 @@ import { publicFileUrl, resolveCoverImageUrl } from '../files/public-url.js';
 import { generateQuoteCode } from '../../lib/ids.js';
 import crypto from 'node:crypto';
 import { getSharp } from '../../lib/sharp-lazy.js';
-import { imageUploadMiddleware } from '../../middleware/upload.js';
+import { detectImageType, imageUploadMiddleware } from '../../middleware/upload.js';
 import { tarifarioService } from '../tarifario/service.js';
 import { env } from '../../config/env.js';
 import { recordBookingTransition } from '../../lib/metrics.js';
@@ -35,6 +35,30 @@ import { getPrivateFileStorage } from '../files/private-storage.js';
 
 function refundActor(user: { id: string; role: string }) {
   return { id: user.id, role: user.role as Role };
+}
+
+const MAX_ROOM_IMAGES = 8;
+
+const roomWithImages = {
+  include: { images: { orderBy: { sortOrder: 'asc' as const } } },
+};
+
+function formatRoom(room: any) {
+  if (!room) return room;
+  const images = Array.isArray(room.images)
+    ? room.images.map((img: any) => ({
+        ...img,
+        url: publicFileUrl(img.key),
+        sortOrder: img.sortOrder ?? 0,
+        sort_order: img.sortOrder ?? 0,
+      }))
+    : [];
+  return {
+    ...room,
+    images,
+    imageUrl: images[0]?.url ?? null,
+    image_url: images[0]?.url ?? null,
+  };
 }
 
 export const adminRouter = Router();
@@ -958,8 +982,11 @@ function formatHotelResponse(hotel: any) {
     }
   }
 
+  const rooms = Array.isArray(hotel.rooms) ? hotel.rooms.map(formatRoom) : hotel.rooms;
+
   return {
     ...hotel,
+    rooms,
     images,
     coverImageKey: coverImageKey ?? null,
     coverImageUrl: coverImageUrl ?? null,
@@ -987,7 +1014,7 @@ adminRouter.get('/hotels', requireRole('admin'), async (_req, res, next) => {
   try {
     const hotels = await prisma.hotel.findMany({
       include: {
-        rooms: true,
+        rooms: roomWithImages,
         seasons: { include: { rates: true } },
         paymentRules: true,
         images: { orderBy: { sortOrder: 'asc' } },
@@ -1056,7 +1083,7 @@ adminRouter.post(
           coverImageUrl: data.coverImageUrl ?? null,
         },
         include: {
-          rooms: true,
+          rooms: roomWithImages,
           seasons: { include: { rates: true } },
           paymentRules: true,
           images: { orderBy: { sortOrder: 'asc' } },
@@ -1077,7 +1104,7 @@ adminRouter.get('/hotels/:id', requireRole('admin'), async (req, res, next) => {
     const hotel = await prisma.hotel.findUnique({
       where: { id },
       include: {
-        rooms: true,
+        rooms: roomWithImages,
         seasons: { include: { rates: true } },
         paymentRules: true,
         images: { orderBy: { sortOrder: 'asc' } },
@@ -1101,7 +1128,7 @@ adminRouter.patch('/hotels/:id', requireRole('admin'), async (req, res, next) =>
       where: { id },
       data,
       include: {
-        rooms: true,
+        rooms: roomWithImages,
         seasons: { include: { rates: true } },
         paymentRules: true,
         images: { orderBy: { sortOrder: 'asc' } },
@@ -1116,8 +1143,11 @@ adminRouter.patch('/hotels/:id', requireRole('admin'), async (req, res, next) =>
 
 adminRouter.get('/hotels/:id/rooms', requireRole('admin'), async (req, res, next) => {
   try {
-    const rooms = await prisma.roomType.findMany({ where: { hotelId: req.params.id as string } });
-    res.json({ data: rooms });
+    const rooms = await prisma.roomType.findMany({
+      where: { hotelId: req.params.id as string },
+      include: roomWithImages.include,
+    });
+    res.json({ data: rooms.map(formatRoom) });
   } catch (err) {
     next(err);
   }
@@ -1138,9 +1168,10 @@ adminRouter.post('/hotels/:id/rooms', requireRole('admin'), async (req, res, nex
         maxOccupancy: Number.isFinite(maxOccupancy) && maxOccupancy > 0 ? maxOccupancy : 2,
         isActive,
       },
+      include: roomWithImages.include,
     });
     await ratesService.bumpCatalogCache();
-    res.status(201).json({ data: room });
+    res.status(201).json({ data: formatRoom(room) });
   } catch (err) {
     next(err);
   }
@@ -1166,13 +1197,196 @@ adminRouter.patch('/hotels/:id/rooms/:roomId', requireRole('admin'), async (req,
     const room = await prisma.roomType.update({
       where: { id: roomId },
       data,
+      include: roomWithImages.include,
     });
     await ratesService.bumpCatalogCache();
-    res.json({ data: room });
+    res.json({ data: formatRoom(room) });
   } catch (err) {
     next(err);
   }
 });
+
+async function readGalleryImage(key: string): Promise<Buffer | null> {
+  try {
+    const local = await fileStorage.get(key);
+    if (local.length > 0 && detectImageType(local)) return local;
+  } catch {
+    // Gallery files are stored on the public bucket, not always on this API disk.
+  }
+
+  try {
+    const res = await fetch(publicFileUrl(key));
+    if (!res.ok) return null;
+    const remote = Buffer.from(await res.arrayBuffer());
+    return remote.length > 0 && detectImageType(remote) ? remote : null;
+  } catch {
+    return null;
+  }
+}
+
+async function encodeRoomImage(buffer: Buffer): Promise<Buffer> {
+  const sharp = await getSharp();
+  if (!sharp) {
+    throw new ValidationError(
+      'Image processing is unavailable on this server. Install sharp for this CPU or upload WebP/JPEG without conversion.'
+    );
+  }
+  return sharp(buffer)
+    .rotate()
+    .resize(1600, 1600, { fit: 'inside', withoutEnlargement: true })
+    .webp({ quality: 85 })
+    .toBuffer();
+}
+
+async function assertRoomImageCapacity(roomTypeId: string) {
+  const count = await prisma.roomImage.count({ where: { roomTypeId } });
+  if (count >= MAX_ROOM_IMAGES) {
+    throw new ValidationError(`A room type can have at most ${MAX_ROOM_IMAGES} images`);
+  }
+  return count;
+}
+
+async function createRoomImageRecord(input: {
+  room: { id: string; hotelId: string; name: string };
+  buffer: Buffer;
+  alt?: string | null;
+  sourceHotelImageId?: string | null;
+}) {
+  const sortOrder = await assertRoomImageCapacity(input.room.id);
+  const webpBuffer = await encodeRoomImage(input.buffer);
+  console.log("webpBuffer==========", webpBuffer);
+  const imageId = crypto.randomUUID();
+  const key = `public/hotels/${input.room.hotelId}/rooms/${input.room.id}/${imageId}.webp`;
+  console.log("key==========", key);
+  await fileStorage.put(key, webpBuffer, { contentType: 'image/webp' });
+  try {
+    return await prisma.roomImage.create({
+      data: {
+        id: imageId,
+        roomTypeId: input.room.id,
+        key,
+        alt: input.alt || input.room.name,
+        sortOrder,
+        sourceHotelImageId: input.sourceHotelImageId ?? null,
+      },
+    });
+  } catch (err) {
+    console.log("err==========", err);
+    await fileStorage.delete(key).catch(() => undefined);
+    throw err;
+  }
+}
+
+async function linkGalleryImage(input: {
+  room: { id: string; name: string };
+  source: { id: string; key: string; alt: string | null };
+}) {
+  return prisma.roomImage.create({
+    data: {
+      roomTypeId: input.room.id,
+      key: input.source.key,
+      alt: input.source.alt || input.room.name,
+      sortOrder: await assertRoomImageCapacity(input.room.id),
+      sourceHotelImageId: input.source.id,
+    },
+  });
+}
+
+adminRouter.post(
+  '/hotels/:id/rooms/:roomId/images',
+  requireRole('admin'),
+  imageUploadMiddleware,
+  async (req, res, next) => {
+    try {
+      const hotelId = req.params.id as string;
+      const roomId = req.params.roomId as string;
+      const room = await prisma.roomType.findUnique({ where: { id: roomId } });
+      if (!room || room.hotelId !== hotelId) throw new NotFoundError('Room not found');
+
+      const image = await createRoomImageRecord({
+        room,
+        buffer: req.file!.buffer,
+        alt: req.body.alt || room.name,
+      });
+      await ratesService.bumpCatalogCache();
+      res.status(201).json({
+        data: { ...image, url: publicFileUrl(image.key), sort_order: image.sortOrder },
+      });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
+adminRouter.post(
+  '/hotels/:id/rooms/:roomId/images/from-gallery',
+  requireRole('admin'),
+  async (req, res, next) => {
+    try {
+      const hotelId = req.params.id as string;
+      const roomId = req.params.roomId as string;
+      const hotelImageId = String(req.body.hotel_image_id ?? req.body.hotelImageId ?? '');
+      if (!hotelImageId) throw new ValidationError('hotel_image_id is required');
+
+      const room = await prisma.roomType.findUnique({ where: { id: roomId } });
+      if (!room || room.hotelId !== hotelId) throw new NotFoundError('Room not found');
+
+      const source = await prisma.hotelImage.findUnique({ where: { id: hotelImageId } });
+      if (!source || source.hotelId !== hotelId) throw new NotFoundError('Gallery image not found');
+
+      const already = await prisma.roomImage.findFirst({
+        where: { roomTypeId: room.id, sourceHotelImageId: source.id },
+      });
+      if (already) throw new ValidationError('This gallery photo is already on the room type');
+
+      const buffer = await readGalleryImage(source.key);
+      const image = buffer
+        ? await createRoomImageRecord({
+            room,
+            buffer,
+            alt: source.alt || room.name,
+            sourceHotelImageId: source.id,
+          })
+        : await linkGalleryImage({ room, source });
+      await ratesService.bumpCatalogCache();
+      res.status(201).json({
+        data: { ...image, url: publicFileUrl(image.key), sort_order: image.sortOrder },
+      });
+    } catch (err) {
+      console.log("err==========", err);
+      next(err);
+    }
+  }
+);
+
+adminRouter.delete(
+  '/hotels/:id/rooms/:roomId/images/:imageId',
+  requireRole('admin'),
+  async (req, res, next) => {
+    try {
+      const hotelId = req.params.id as string;
+      const roomId = req.params.roomId as string;
+      const imageId = req.params.imageId as string;
+      const image = await prisma.roomImage.findUnique({
+        where: { id: imageId },
+        include: { roomType: true },
+      });
+      if (!image || image.roomTypeId !== roomId || image.roomType.hotelId !== hotelId) {
+        throw new NotFoundError('Room image not found');
+      }
+
+      const ownsFile = image.key.includes(`/rooms/${image.roomTypeId}/`);
+      if (ownsFile) {
+        await fileStorage.delete(image.key);
+      }
+      await prisma.roomImage.delete({ where: { id: imageId } });
+      await ratesService.bumpCatalogCache();
+      res.json({ data: { success: true } });
+    } catch (err) {
+      next(err);
+    }
+  }
+);
 
 adminRouter.get('/hotels/:id/seasons', requireRole('admin'), async (req, res, next) => {
   try {
@@ -1268,8 +1482,6 @@ adminRouter.post('/hotels/:id/rates', requireRole('admin'), async (req, res, nex
     const body = req.body;
     const markupRaw = body.markupPercent !== undefined ? body.markupPercent : body.markup_percent;
     const sellRateRaw = body.sellRate !== undefined ? body.sellRate : body.sell_rate;
-    const percentAdultRaw = body.percentOfAdult !== undefined ? body.percentOfAdult : body.percent_of_adult;
-
     const rate = await prisma.rate.create({
       data: {
         roomTypeId: body.roomTypeId ?? body.room_type_id,
@@ -1277,19 +1489,11 @@ adminRouter.post('/hotels/:id/rates', requireRole('admin'), async (req, res, nex
         mealPlan: body.mealPlan ?? body.meal_plan,
         concept: body.concept || null,
         priceKind: body.priceKind ?? body.price_kind,
-        occupancy: body.occupancy || null,
         pricingUnit: body.pricingUnit ?? body.pricing_unit,
         netRate: body.netRate ?? body.net_rate,
         markupPercent: markupRaw !== undefined && markupRaw !== null && markupRaw !== '' ? Number(markupRaw) : null,
         sellRate: sellRateRaw !== undefined && sellRateRaw !== null && sellRateRaw !== '' ? Number(sellRateRaw) : null,
-        percentOfAdult: percentAdultRaw !== undefined && percentAdultRaw !== null && percentAdultRaw !== '' ? Number(percentAdultRaw) : null,
-        childAgeMin: (body.childAgeMin ?? body.child_age_min) ?? null,
-        childAgeMax: (body.childAgeMax ?? body.child_age_max) ?? null,
-        daysOfWeek: body.daysOfWeek ?? body.days_of_week ?? [],
         minNights: Number(body.minNights ?? body.min_nights) || 1,
-        maxNights: (body.maxNights ?? body.max_nights) ? Number(body.maxNights ?? body.max_nights) : null,
-        packageNights: (body.packageNights ?? body.package_nights) ? Number(body.packageNights ?? body.package_nights) : null,
-        sourcePage: (body.sourcePage ?? body.source_page) ? Number(body.sourcePage ?? body.source_page) : null,
         isActive: body.isActive !== undefined ? Boolean(body.isActive) : (body.is_active !== undefined ? Boolean(body.is_active) : true),
       },
     });
@@ -1313,7 +1517,6 @@ adminRouter.patch('/rates/:id', requireRole('admin'), async (req, res, next) => 
     if (body.mealPlan !== undefined || body.meal_plan !== undefined) data.mealPlan = body.mealPlan ?? body.meal_plan;
     if (body.concept !== undefined) data.concept = body.concept || null;
     if (body.priceKind !== undefined || body.price_kind !== undefined) data.priceKind = body.priceKind ?? body.price_kind;
-    if (body.occupancy !== undefined) data.occupancy = body.occupancy ? Number(body.occupancy) : null;
     if (body.pricingUnit !== undefined || body.pricing_unit !== undefined) data.pricingUnit = body.pricingUnit ?? body.pricing_unit;
     if (body.netRate !== undefined || body.net_rate !== undefined) data.netRate = body.netRate ?? body.net_rate;
     if (body.markupPercent !== undefined || body.markup_percent !== undefined) {
@@ -1324,17 +1527,7 @@ adminRouter.patch('/rates/:id', requireRole('admin'), async (req, res, next) => 
       const raw = body.sellRate !== undefined ? body.sellRate : body.sell_rate;
       data.sellRate = raw !== null && raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : null;
     }
-    if (body.percentOfAdult !== undefined || body.percent_of_adult !== undefined) {
-      const raw = body.percentOfAdult !== undefined ? body.percentOfAdult : body.percent_of_adult;
-      data.percentOfAdult = raw !== null && raw !== '' && Number.isFinite(Number(raw)) ? Number(raw) : null;
-    }
-    if (body.childAgeMin !== undefined || body.child_age_min !== undefined) data.childAgeMin = (body.childAgeMin ?? body.child_age_min) ?? null;
-    if (body.childAgeMax !== undefined || body.child_age_max !== undefined) data.childAgeMax = (body.childAgeMax ?? body.child_age_max) ?? null;
-    if (body.daysOfWeek !== undefined || body.days_of_week !== undefined) data.daysOfWeek = body.daysOfWeek ?? body.days_of_week;
     if (body.minNights !== undefined || body.min_nights !== undefined) data.minNights = Number(body.minNights ?? body.min_nights);
-    if (body.maxNights !== undefined || body.max_nights !== undefined) data.maxNights = (body.maxNights ?? body.max_nights) ? Number(body.maxNights ?? body.max_nights) : null;
-    if (body.packageNights !== undefined || body.package_nights !== undefined) data.packageNights = (body.packageNights ?? body.package_nights) ? Number(body.packageNights ?? body.package_nights) : null;
-    if (body.sourcePage !== undefined || body.source_page !== undefined) data.sourcePage = (body.sourcePage ?? body.source_page) ? Number(body.sourcePage ?? body.source_page) : null;
     if (body.isActive !== undefined || body.is_active !== undefined) data.isActive = Boolean(body.isActive ?? body.is_active);
 
     const rate = await prisma.rate.update({

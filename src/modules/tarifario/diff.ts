@@ -8,7 +8,6 @@ export interface PlanRateItem {
   roomName: string;
   seasonName: string;
   mealPlan: string;
-  occupancy: number | null;
   concept: string | null;
   priceKind: string;
   pricingUnit: string;
@@ -89,7 +88,6 @@ export function computeImportPlan(
             roomName: r.room_name,
             seasonName: r.season_name,
             mealPlan: r.meal_plan,
-            occupancy: r.occupancy,
             concept: r.concept,
             priceKind: r.price_kind,
             pricingUnit: r.pricing_unit,
@@ -103,7 +101,6 @@ export function computeImportPlan(
             roomName: r.room_name,
             seasonName: r.season_name,
             mealPlan: r.meal_plan,
-            occupancy: r.occupancy,
             concept: r.concept,
             priceKind: r.price_kind,
             pricingUnit: r.pricing_unit,
@@ -146,7 +143,6 @@ export function computeImportPlan(
           roomName: r.room_name,
           seasonName: r.season_name,
           mealPlan: r.meal_plan,
-          occupancy: r.occupancy,
           concept: r.concept,
           priceKind: r.price_kind,
           pricingUnit: r.pricing_unit,
@@ -159,10 +155,10 @@ export function computeImportPlan(
       const match = existingRates.find((er) => {
         if (!er.isActive) return false;
         if (normalizeName(er.roomName || '') !== normalizeName(r.room_name)) return false;
+        if (normalizeName(er.seasonName || '') !== normalizeName(r.season_name)) return false;
         if (er.mealPlan !== r.meal_plan) return false;
         if ((er.concept ?? null) !== (r.concept ?? null)) return false;
         if (er.priceKind !== r.price_kind) return false;
-        if ((er.occupancy ?? null) !== (r.occupancy ?? null)) return false;
         if (er.minNights !== r.min_nights) return false;
         return true;
       });
@@ -178,7 +174,6 @@ export function computeImportPlan(
             roomName: r.room_name,
             seasonName: r.season_name,
             mealPlan: r.meal_plan,
-            occupancy: r.occupancy,
             concept: r.concept,
             priceKind: r.price_kind,
             pricingUnit: r.pricing_unit,
@@ -192,7 +187,6 @@ export function computeImportPlan(
             roomName: r.room_name,
             seasonName: r.season_name,
             mealPlan: r.meal_plan,
-            occupancy: r.occupancy,
             concept: r.concept,
             priceKind: r.price_kind,
             pricingUnit: r.pricing_unit,
@@ -205,7 +199,6 @@ export function computeImportPlan(
             roomName: r.room_name,
             seasonName: r.season_name,
             mealPlan: r.meal_plan,
-            occupancy: r.occupancy,
             concept: r.concept,
             priceKind: r.price_kind,
             pricingUnit: r.pricing_unit,
@@ -219,7 +212,6 @@ export function computeImportPlan(
           roomName: r.room_name,
           seasonName: r.season_name,
           mealPlan: r.meal_plan,
-          occupancy: r.occupancy,
           concept: r.concept,
           priceKind: r.price_kind,
           pricingUnit: r.pricing_unit,
@@ -237,7 +229,6 @@ export function computeImportPlan(
           roomName: er.roomName || 'Unknown',
           seasonName: er.seasonName || 'Unknown',
           mealPlan: er.mealPlan,
-          occupancy: er.occupancy,
           concept: er.concept,
           priceKind: er.priceKind,
           pricingUnit: er.pricingUnit,
@@ -256,32 +247,21 @@ export function computeImportPlan(
     manualReviewCount: planRates.filter((r) => r.action === 'manual_review').length,
   };
 
-  const lines = [
-    `# Tarifario Import Plan (${doc.source})`,
-    `Snapshot Hash: \`${snapshotHash}\``,
+  const diffMarkdown = [
+    '# Tarifario Import Plan',
     '',
-    '## Summary',
-    `- Hotels to create (draft): ${summary.hotelsToCreate}`,
-    `- Rates to create: ${summary.ratesToCreate}`,
-    `- Rates to deactivate: ${summary.ratesToDeactivate}`,
-    `- Rates unchanged: ${summary.ratesUnchanged}`,
-    `- Rates flagged for manual review: ${summary.manualReviewCount}`,
+    `**Source:** ${doc.source}`,
+    `**Snapshot Hash:** \`${snapshotHash}\``,
     '',
-    '## Changes Breakdown',
-  ];
-
-  for (const r of planRates) {
-    if (r.action === 'keep') continue;
-    lines.push(
-      `- [${r.action.toUpperCase()}] Hotel: ${r.hotelSlug} | Room: ${r.roomName} | Meal: ${r.mealPlan} | Occ: ${r.occupancy ?? 'any'} | Rate: $${r.netRate} (${r.reason || 'new'})`
-    );
-  }
-
-  const diffMarkdown = lines.join('\n');
-  const planId = crypto.randomUUID();
+    '## Rate changes',
+    ...planRates.map(
+      (r) =>
+        `- [${r.action.toUpperCase()}] Hotel: ${r.hotelSlug} | Room: ${r.roomName} | Meal: ${r.mealPlan} | Rate: $${r.netRate} (${r.reason || 'new'})`
+    ),
+  ].join('\n');
 
   return {
-    planId,
+    planId: crypto.randomUUID(),
     snapshotHash,
     source: doc.source,
     hotels: planHotels,

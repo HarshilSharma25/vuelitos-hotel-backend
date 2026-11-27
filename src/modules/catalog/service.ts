@@ -17,9 +17,9 @@ import {
   occupancyFitRank,
   guestNetRate,
 } from '../pricing/index.js';
+import { roomMaxOccupancyMap, toRateInput } from '../pricing/rate-input.js';
 import { hotelMatchesMealPlans, hotelMatchesStayType, parseMealPlanFilters } from './stay-filters.js';
 import { getCaracasWallDate } from '../../lib/caracas-time.js';
-import { asNumberArray } from '../../lib/json.js';
 import {
   InvalidStayWindowError,
   NotFoundError,
@@ -64,6 +64,30 @@ function pricedNetRate(
   );
 }
 
+function mapDbRatesToSeasonInput(
+  rates: {
+    id: string;
+    roomTypeId: string;
+    seasonId: string;
+    mealPlan: string;
+    concept: string | null;
+    priceKind: string;
+    pricingUnit: string;
+    netRate: { toString(): string };
+    markupPercent: { toString(): string } | null;
+    minNights: number;
+    isActive: boolean;
+  }[],
+  rooms: { id: string; maxOccupancy: number }[],
+  defaultCommission: { toString(): string }
+): RateInput[] {
+  const occ = roomMaxOccupancyMap(rooms);
+  return rates.map((r) => ({
+    ...toRateInput(r, occ.get(r.roomTypeId) ?? 2),
+    netRate: pricedNetRate(r.netRate, r.markupPercent, defaultCommission),
+  }));
+}
+
 function isBetterGuestRate(
   candidate: RateInput,
   current: RateInput,
@@ -73,15 +97,6 @@ function isBetterGuestRate(
 ): boolean {
   const rankDiff = occupancyFitRank(candidate, guests) - occupancyFitRank(current, guests);
   if (rankDiff !== 0) return rankDiff > 0;
-  if (
-    candidate.pricingUnit === 'per_room' &&
-    current.pricingUnit === 'per_room' &&
-    candidate.occupancy !== null &&
-    current.occupancy !== null &&
-    candidate.occupancy !== current.occupancy
-  ) {
-    return candidate.occupancy < current.occupancy;
-  }
   return candidateAmount.cmp(currentAmount) < 0;
 }
 
@@ -208,21 +223,7 @@ export class CatalogService {
         bookingFrom: s.bookingFrom ? s.bookingFrom.toISOString().slice(0, 10) : null,
         bookingTo: s.bookingTo ? s.bookingTo.toISOString().slice(0, 10) : null,
         isActive: s.isActive,
-        rates: s.rates.map((r) => ({
-          id: r.id,
-          roomTypeId: r.roomTypeId,
-          seasonId: r.seasonId,
-          mealPlan: r.mealPlan,
-          concept: r.concept as any,
-          priceKind: r.priceKind as any,
-          occupancy: r.occupancy,
-          pricingUnit: r.pricingUnit as any,
-          netRate: pricedNetRate(r.netRate, r.markupPercent, h.defaultCommissionPercent),
-          daysOfWeek: asNumberArray(r.daysOfWeek),
-          minNights: r.minNights,
-          maxNights: r.maxNights,
-          isActive: r.isActive,
-        })),
+        rates: mapDbRatesToSeasonInput(s.rates, h.rooms, h.defaultCommissionPercent),
       }));
 
       const undated =
@@ -367,21 +368,7 @@ export class CatalogService {
         bookingFrom: s.bookingFrom ? s.bookingFrom.toISOString().slice(0, 10) : null,
         bookingTo: s.bookingTo ? s.bookingTo.toISOString().slice(0, 10) : null,
         isActive: s.isActive,
-        rates: s.rates.map((r) => ({
-          id: r.id,
-          roomTypeId: r.roomTypeId,
-          seasonId: r.seasonId,
-          mealPlan: r.mealPlan,
-          concept: r.concept as any,
-          priceKind: r.priceKind as any,
-          occupancy: r.occupancy,
-          pricingUnit: r.pricingUnit as any,
-          netRate: pricedNetRate(r.netRate, r.markupPercent, h.defaultCommissionPercent),
-          daysOfWeek: asNumberArray(r.daysOfWeek),
-          minNights: r.minNights,
-          maxNights: r.maxNights,
-          isActive: r.isActive,
-        })),
+        rates: mapDbRatesToSeasonInput(s.rates, h.rooms, h.defaultCommissionPercent),
       }));
 
       const purePaymentRules = h.paymentRules.map((pr) => ({
@@ -587,7 +574,10 @@ export class CatalogService {
     const hotel = await prisma.hotel.findUnique({
       where: { slug },
       include: {
-        rooms: { where: { isActive: true } },
+        rooms: {
+          where: { isActive: true },
+          include: { images: { orderBy: { sortOrder: 'asc' } } },
+        },
         seasons: {
           where: { isActive: true },
           include: { rates: { where: { isActive: true } } },
@@ -631,21 +621,7 @@ export class CatalogService {
       bookingFrom: s.bookingFrom ? s.bookingFrom.toISOString().slice(0, 10) : null,
       bookingTo: s.bookingTo ? s.bookingTo.toISOString().slice(0, 10) : null,
       isActive: s.isActive,
-      rates: s.rates.map((r) => ({
-        id: r.id,
-        roomTypeId: r.roomTypeId,
-        seasonId: r.seasonId,
-        mealPlan: r.mealPlan,
-        concept: r.concept as any,
-        priceKind: r.priceKind as any,
-        occupancy: r.occupancy,
-          pricingUnit: r.pricingUnit as any,
-          netRate: pricedNetRate(r.netRate, r.markupPercent, hotel.defaultCommissionPercent),
-          daysOfWeek: asNumberArray(r.daysOfWeek),
-          minNights: r.minNights,
-          maxNights: r.maxNights,
-          isActive: r.isActive,
-        })),
+      rates: mapDbRatesToSeasonInput(s.rates, hotel.rooms, hotel.defaultCommissionPercent),
     }));
 
     const purePaymentRules = hotel.paymentRules.map((pr) => ({
@@ -653,6 +629,8 @@ export class CatalogService {
       ivaRate: Number(pr.ivaRate),
       surchargePercent: pr.surchargePercent ? Number(pr.surchargePercent) : null,
     }));
+
+    const roomOcc = roomMaxOccupancyMap(hotel.rooms);
 
     const mealPlansSet = new Set<string>();
     hotel.seasons.forEach((s) => s.rates.forEach((r) => mealPlansSet.add(r.mealPlan)));
@@ -689,7 +667,7 @@ export class CatalogService {
           return {
             room_type_id: r.roomTypeId,
             meal_plan: r.mealPlan,
-            occupancy: r.occupancy ?? 1,
+            occupancy: roomOcc.get(r.roomTypeId) ?? 1,
             per: (r.pricingUnit === 'per_room' ? 'room' : 'person') as 'room' | 'person',
             price: money,
             min_nights: r.minNights,
@@ -864,11 +842,23 @@ export class CatalogService {
             stayData.options.some((opt: { room_type_id: string }) => opt.room_type_id === r.id)
           )
         : hotel.rooms
-      ).map((r) => ({
-        id: r.id,
-        name: r.name,
-        max_occupancy: r.maxOccupancy,
-      })),
+      ).map((r) => {
+        const images = (r.images ?? []).map((img) => ({
+          id: img.id,
+          url: publicFileUrl(img.key),
+          alt: img.alt,
+          sort_order: img.sortOrder,
+        }));
+        return {
+          id: r.id,
+          name: r.name,
+          max_occupancy: r.maxOccupancy,
+          image: images[0]?.url ?? null,
+          image_url: images[0]?.url ?? null,
+          alt: images[0]?.alt ?? r.name,
+          images,
+        };
+      }),
       seasonal_rates: seasonalRates,
       from_price: lowestFromPrice ? { price: lowestFromPrice, per: 'night' as const } : null,
       stay: stayData,
@@ -893,6 +883,7 @@ export class CatalogService {
     const hotel = await prisma.hotel.findUnique({
       where: { slug },
       include: {
+        rooms: { where: { isActive: true } },
         seasons: {
           where: { isActive: true },
           include: { rates: { where: { isActive: true } } },
@@ -940,21 +931,7 @@ export class CatalogService {
       bookingFrom: s.bookingFrom ? s.bookingFrom.toISOString().slice(0, 10) : null,
       bookingTo: s.bookingTo ? s.bookingTo.toISOString().slice(0, 10) : null,
       isActive: s.isActive,
-      rates: s.rates.map((r) => ({
-        id: r.id,
-        roomTypeId: r.roomTypeId,
-        seasonId: r.seasonId,
-        mealPlan: r.mealPlan,
-        concept: r.concept as any,
-        priceKind: r.priceKind as any,
-        occupancy: r.occupancy,
-        pricingUnit: r.pricingUnit as any,
-        netRate: pricedNetRate(r.netRate, r.markupPercent, hotel.defaultCommissionPercent),
-        daysOfWeek: asNumberArray(r.daysOfWeek),
-        minNights: r.minNights,
-        maxNights: r.maxNights,
-        isActive: r.isActive,
-      })),
+      rates: mapDbRatesToSeasonInput(s.rates, hotel.rooms, hotel.defaultCommissionPercent),
     }));
 
     const purePaymentRules = hotel.paymentRules.map((pr) => ({

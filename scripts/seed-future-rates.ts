@@ -82,11 +82,11 @@ async function main() {
       seasonsCreated++;
 
       const plans = [
-        { mealPlan: 'BB', concept: RateConcept.OCUPACION, occupancy: 2, unit: PricingUnit.per_room, add: 0, ages: {} },
-        { mealPlan: 'MAP', concept: RateConcept.OCUPACION, occupancy: 2, unit: PricingUnit.per_person, add: 25, ages: {} },
-        { mealPlan: 'BB', concept: RateConcept.NINO, occupancy: null, unit: PricingUnit.per_person, add: -30, ages: { childAgeMin: 3, childAgeMax: 12 } },
-        { mealPlan: 'AI', concept: RateConcept.OCUPACION, occupancy: 1, unit: PricingUnit.per_room, add: 55, ages: {} },
-        { mealPlan: 'BB', concept: RateConcept.PAX_ADICIONAL, occupancy: null, unit: PricingUnit.per_person, add: 20, ages: {} },
+        { mealPlan: 'BB', concept: RateConcept.OCUPACION, unit: PricingUnit.per_room, add: 0 },
+        { mealPlan: 'MAP', concept: RateConcept.OCUPACION, unit: PricingUnit.per_person, add: 25 },
+        { mealPlan: 'BB', concept: RateConcept.OCUPACION, unit: PricingUnit.per_person, add: -30 },
+        { mealPlan: 'AI', concept: RateConcept.OCUPACION, unit: PricingUnit.per_room, add: 55 },
+        { mealPlan: 'BB', concept: RateConcept.OCUPACION, unit: PricingUnit.per_person, add: 20 },
       ];
 
       for (let r = 0; r < rateCount; r++) {
@@ -101,15 +101,12 @@ async function main() {
             mealPlan: plan.mealPlan,
             concept: plan.concept,
             priceKind: PriceKind.IMPORTE,
-            occupancy: plan.occupancy,
             pricingUnit: plan.unit,
             netRate: net,
             markupPercent,
             sellRate: Math.round(net * (1 + markupPercent / 100) * 100) / 100,
-            daysOfWeek: [],
             minNights: 1,
             isActive: true,
-            ...plan.ages,
           },
         });
         ratesCreated++;

@@ -6,14 +6,9 @@ export const tarifarioRateSchema = z.object({
   meal_plan: z.string().min(1),
   concept: z.enum(['OCUPACION', 'NINO', 'PAX_ADICIONAL']).nullable().default(null),
   price_kind: z.enum(['IMPORTE', 'BAJO_PEDIDO', 'GRATIS', 'PORCENTAJE_ADULTO']),
-  occupancy: z.number().int().min(1).nullable().default(null),
   pricing_unit: z.enum(['per_room', 'per_person']),
   net_rate: z.number().min(0),
-  days_of_week: z.array(z.number().int().min(0).max(6)).default([]),
   min_nights: z.number().int().min(1).default(1),
-  max_nights: z.number().int().min(1).nullable().default(null),
-  child_age_min: z.number().int().min(0).nullable().default(null),
-  child_age_max: z.number().int().min(0).nullable().default(null),
 });
 
 export const tarifarioSeasonSchema = z.object({

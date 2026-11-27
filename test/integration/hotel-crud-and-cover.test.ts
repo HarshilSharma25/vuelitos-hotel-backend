@@ -186,7 +186,7 @@ describe('Admin Hotel CRUD, Key Mapping & Cover Image Management', () => {
       .set('Authorization', `Bearer ${adminSessionToken}`)
       .send({
         name: 'Deluxe Suite',
-        max_occupancy: 4,
+        max_maxOccupancy: 4,
         is_active: false,
       });
 
@@ -285,8 +285,7 @@ describe('Admin Hotel CRUD, Key Mapping & Cover Image Management', () => {
         mealPlan: 'desayuno',
         concept: 'OCUPACION',
         priceKind: 'IMPORTE',
-        occupancy: 2,
-        pricingUnit: 'per_room',
+                pricingUnit: 'per_room',
         netRate: 100,
         minNights: 1,
         isActive: true,

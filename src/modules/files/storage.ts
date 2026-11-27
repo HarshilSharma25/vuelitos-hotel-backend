@@ -5,6 +5,7 @@ import { publicFileUrl } from './public-url.js';
 
 export interface FileStorage {
   put(key: string, data: Buffer, opts: { contentType: string }): Promise<void>;
+  get(key: string): Promise<Buffer>;
   move(fromKey: string, toKey: string): Promise<void>;
   delete(key: string): Promise<void>;
   url(key: string): string;
@@ -21,6 +22,10 @@ export class LocalDiskStorage implements FileStorage {
     const fullPath = this.resolvePath(key);
     await fs.mkdir(path.dirname(fullPath), { recursive: true });
     await fs.writeFile(fullPath, data);
+  }
+
+  async get(key: string): Promise<Buffer> {
+    return fs.readFile(this.resolvePath(key));
   }
 
   async move(fromKey: string, toKey: string): Promise<void> {
@@ -62,6 +67,19 @@ export class HttpFileServerStorage implements FileStorage {
     if (!res.ok) {
       throw new Error(`HttpFileServerStorage.put failed: ${res.status} ${res.statusText}`);
     }
+  }
+
+  async get(key: string): Promise<Buffer> {
+    const res = await fetch(`${this.serverUrl}/${key.replace(/^\/+/, '')}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${this.token}`,
+      },
+    });
+    if (!res.ok) {
+      throw new Error(`HttpFileServerStorage.get failed: ${res.status} ${res.statusText}`);
+    }
+    return Buffer.from(await res.arrayBuffer());
   }
 
   async move(fromKey: string, toKey: string): Promise<void> {

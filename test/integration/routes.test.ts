@@ -114,8 +114,7 @@ describe('End-to-End API Routes Integration', () => {
         mealPlan: 'desayuno',
         concept: 'OCUPACION',
         priceKind: 'IMPORTE',
-        occupancy: 2,
-        pricingUnit: 'per_room',
+                pricingUnit: 'per_room',
         netRate: 100,
         minNights: 1,
         isActive: true,
@@ -532,7 +531,7 @@ describe('End-to-End API Routes Integration', () => {
           category: 'Hotel',
           currency: 'USD',
           is_solo_divisas: false,
-          rooms: [{ name: 'Habitación Estándar', max_occupancy: 3 }],
+          rooms: [{ name: 'Habitación Estándar', max_maxOccupancy: 3 }],
           seasons: [
             {
               name: 'Temporada Alta 2026',
@@ -550,8 +549,7 @@ describe('End-to-End API Routes Integration', () => {
               meal_plan: 'desayuno',
               concept: 'OCUPACION',
               price_kind: 'IMPORTE',
-              occupancy: 2,
-              pricing_unit: 'per_room',
+                            pricing_unit: 'per_room',
               net_rate: 105, // Updated rate from 100 to 105
               days_of_week: [],
               min_nights: 1,

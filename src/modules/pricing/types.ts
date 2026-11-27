@@ -22,15 +22,11 @@ export interface RateInput {
   mealPlan: string;
   concept: RateConcept | null;
   priceKind: PriceKind;
-  occupancy: number | null;
   pricingUnit: PricingUnit;
   netRate: number | string | Rational;
-  percentOfAdult?: number | string | Rational | null;
-  childAgeMin?: number | null;
-  childAgeMax?: number | null;
-  daysOfWeek: number[];
+  /** From room type max occupancy — not stored on the rate row. */
+  maxOccupancy: number;
   minNights: number;
-  maxNights: number | null;
   isActive: boolean;
 }
 

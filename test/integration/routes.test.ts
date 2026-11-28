@@ -183,6 +183,23 @@ describe('End-to-End API Routes Integration', () => {
     expect(res.body.meta.applied).toBeDefined();
   });
 
+  it('GET /api/v1/featured-hotels returns up to 5 cheapest hotels for destination and check-in', async () => {
+    const res = await request(app).get(
+      '/api/v1/featured-hotels?destination=Isla%20de%20Margarita&check_in=2026-11-10'
+    );
+    expect(res.status).toBe(200);
+    expect(res.body.data.items.length).toBeLessThanOrEqual(5);
+    expect(res.body.data.exchange).toBeDefined();
+    expect(res.body.meta.applied.check_in).toBe('2026-11-10');
+    expect(res.body.meta.applied.check_out).toBe('2026-11-11');
+    expect(res.body.meta.next_cursor).toBeNull();
+    if (res.body.data.items.length > 1) {
+      const prices = res.body.data.items.map((h: { price: { usdt: number } | null }) => h.price?.usdt ?? Infinity);
+      const sorted = [...prices].sort((a, b) => a - b);
+      expect(prices).toEqual(sorted);
+    }
+  });
+
   it('GET /api/v1/hotels/:slug returns detail', async () => {
     const res = await request(app).get('/api/v1/hotels/hotel-playa-el-agua');
     expect(res.status).toBe(200);

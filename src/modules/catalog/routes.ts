@@ -54,6 +54,35 @@ catalogRouter.get(
   }
 );
 
+const topHotelsQuerySchema = z
+  .object({
+    destination: z.string().min(1),
+    check_in: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+    checkin: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  })
+  .refine((d) => Boolean(d.check_in || d.checkin), {
+    message: 'check_in or checkin is required',
+    path: ['check_in'],
+  });
+
+catalogRouter.get(
+  '/featured-hotels',
+  validate({ query: topHotelsQuerySchema }),
+  async (req, res, next) => {
+    try {
+      const q = req.query as { destination: string; check_in?: string; checkin?: string };
+      const checkIn = q.check_in ?? q.checkin!;
+      const { data, meta } = await catalogService.getTopHotelsByPrice({
+        destination: q.destination,
+        check_in: checkIn,
+      });
+      sendData(res, catalogSearchResponseSchema, data, meta);
+    } catch (err) {
+      next(err);
+    }
+  }
+);
+
 const hotelDetailQuerySchema = z.object({
   check_in: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
   check_out: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),

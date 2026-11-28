@@ -32,6 +32,15 @@ import {
   parseHotelAmenities,
 } from '../../shared/hotelAmenities.js';
 
+export const TOP_HOTELS_BY_PRICE_LIMIT = 5;
+export const TOP_HOTELS_DEFAULT_NIGHTS = 1;
+
+function addDaysToIsoDate(isoDate: string, days: number): string {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
 export interface CatalogSearchParams {
   destination?: string;
   check_in?: string;
@@ -274,6 +283,17 @@ export class CatalogService {
     return {
       destinations: Array.from(destMap.values()).map(({ bestUsdt: _bestUsdt, ...dest }) => dest),
     };
+  }
+
+  async getTopHotelsByPrice(params: { destination: string; check_in: string }) {
+    const check_out = addDaysToIsoDate(params.check_in, TOP_HOTELS_DEFAULT_NIGHTS);
+    return this.searchHotels({
+      destination: params.destination,
+      check_in: params.check_in,
+      check_out,
+      sort: 'price_asc',
+      limit: TOP_HOTELS_BY_PRICE_LIMIT,
+    });
   }
 
   async searchHotels(params: CatalogSearchParams) {
